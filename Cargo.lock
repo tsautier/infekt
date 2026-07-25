@@ -2117,7 +2117,7 @@ dependencies = [
 
 [[package]]
 name = "infekt"
-version = "2.0.0-alpha1"
+version = "2.0.0-alpha3"
 dependencies = [
  "colornames",
  "fontdb",
@@ -2132,7 +2132,7 @@ dependencies = [
 
 [[package]]
 name = "infekt-cli"
-version = "2.0.0-alpha1"
+version = "2.0.0-alpha3"
 dependencies = [
  "clap",
  "infekt-core",
@@ -2141,7 +2141,7 @@ dependencies = [
 
 [[package]]
 name = "infekt-core"
-version = "2.0.0-alpha1"
+version = "2.0.0-alpha3"
 dependencies = [
  "askama",
  "hex_color",

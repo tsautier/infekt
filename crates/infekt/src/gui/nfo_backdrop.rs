@@ -10,8 +10,9 @@ use crate::{
 pub(crate) const BACKDROP_WIDTH: u32 = 640;
 pub(crate) const BACKDROP_HEIGHT: u32 = 400;
 
-const ALGORITHM_VERSION: u8 = 1;
+const ALGORITHM_VERSION: u8 = 2;
 const CROP_MARGIN_CELLS: usize = 2;
+const LEADING_ART_BLOCK_THRESHOLD: usize = 20;
 const CANVAS_PADDING: f64 = 24.0;
 const BLUR_SIGMA: f32 = 28.0;
 const FALLBACK_CHARACTER_RATIO_MILLI: u16 = 583;
@@ -179,6 +180,7 @@ struct ContentBounds {
     top: usize,
     right: usize,
     bottom: usize,
+    content_top: usize,
 }
 
 impl ContentBounds {
@@ -191,7 +193,11 @@ impl ContentBounds {
     }
 
     fn contains(self, col: usize, row: usize) -> bool {
-        col >= self.left && col < self.right && row >= self.top && row < self.bottom
+        col >= self.left
+            && col < self.right
+            && row >= self.top
+            && row < self.bottom
+            && row >= self.content_top
     }
 }
 
@@ -347,6 +353,7 @@ fn visible_bounds(grid: &NfoRendererGrid) -> Option<ContentBounds> {
     let mut maximum_col = 0;
     let mut maximum_row = 0;
     let mut has_content = false;
+    let content_top = first_dense_block_row(grid).unwrap_or(0);
 
     let mut include = |col: usize, row: usize| {
         if col >= grid.width || row >= grid.height {
@@ -361,6 +368,10 @@ fn visible_bounds(grid: &NfoRendererGrid) -> Option<ContentBounds> {
     };
 
     for line in &grid.lines {
+        if line.row < content_top {
+            continue;
+        }
+
         for group in &line.block_groups {
             for (offset, shape) in group.blocks.iter().enumerate() {
                 if !is_visible_block(shape) {
@@ -397,7 +408,41 @@ fn visible_bounds(grid: &NfoRendererGrid) -> Option<ContentBounds> {
         bottom: maximum_row
             .saturating_add(CROP_MARGIN_CELLS + 1)
             .min(grid.height),
+        content_top,
     })
+}
+
+fn first_dense_block_row(grid: &NfoRendererGrid) -> Option<usize> {
+    grid.lines
+        .iter()
+        .filter(|line| line.row < grid.height)
+        .filter_map(|line| {
+            let mut visible_cols = [usize::MAX; LEADING_ART_BLOCK_THRESHOLD];
+            let mut visible_blocks = 0;
+
+            for group in &line.block_groups {
+                for (offset, shape) in group.blocks.iter().enumerate() {
+                    let Some(col) = group.col.checked_add(offset) else {
+                        break;
+                    };
+
+                    if col < grid.width
+                        && is_visible_block(shape)
+                        && !visible_cols[..visible_blocks].contains(&col)
+                    {
+                        visible_cols[visible_blocks] = col;
+                        visible_blocks += 1;
+
+                        if visible_blocks >= LEADING_ART_BLOCK_THRESHOLD {
+                            return Some(line.row);
+                        }
+                    }
+                }
+            }
+
+            None
+        })
+        .min()
 }
 
 fn is_visible_block(shape: &NfoRendererBlockShape) -> bool {
@@ -505,10 +550,19 @@ mod tests {
         id: u64,
         line: NfoRendererLine,
     ) -> NfoRendererGrid {
+        grid_with_lines(width, height, id, vec![line])
+    }
+
+    fn grid_with_lines(
+        width: usize,
+        height: usize,
+        id: u64,
+        lines: Vec<NfoRendererLine>,
+    ) -> NfoRendererGrid {
         NfoRendererGrid {
             width,
             height,
-            lines: vec![line],
+            lines,
             has_blocks: true,
             id,
         }
@@ -587,8 +641,134 @@ mod tests {
                 top: 8,
                 right: 33,
                 bottom: 13,
+                content_top: 0,
             })
         );
+    }
+
+    #[test]
+    fn leading_sparse_rows_are_excluded_after_dense_art_anchor() {
+        let mut early = line(3);
+        early.block_groups.push(NfoRendererBlockGroup {
+            col: 0,
+            blocks: vec![NfoRendererBlockShape::FullBlock; 19],
+        });
+        early.text_flights.push(NfoRendererTextFlight {
+            col: 70,
+            text: "ordinary text does not establish the art anchor".into(),
+        });
+
+        let mut inside_margin = line(8);
+        inside_margin.block_groups.push(NfoRendererBlockGroup {
+            col: 35,
+            blocks: vec![NfoRendererBlockShape::FullBlock],
+        });
+
+        let mut anchor = line(10);
+        anchor.block_groups.push(NfoRendererBlockGroup {
+            col: 30,
+            blocks: vec![NfoRendererBlockShape::FullBlock; 20],
+        });
+
+        let mut trailing = line(15);
+        trailing.block_groups.push(NfoRendererBlockGroup {
+            col: 60,
+            blocks: vec![NfoRendererBlockShape::FullBlock],
+        });
+        trailing.text_flights.push(NfoRendererTextFlight {
+            col: 70,
+            text: "A".into(),
+        });
+
+        let grid = grid_with_lines(100, 30, 11, vec![early, inside_margin, anchor, trailing]);
+        let bounds = visible_bounds(&grid).unwrap();
+
+        assert_eq!(
+            bounds,
+            ContentBounds {
+                left: 28,
+                top: 8,
+                right: 73,
+                bottom: 18,
+                content_top: 10,
+            }
+        );
+        assert!(!bounds.contains(35, 8));
+        assert!(bounds.contains(30, 10));
+        assert!(bounds.contains(70, 15));
+    }
+
+    #[test]
+    fn sparse_art_and_text_only_grids_keep_the_existing_fallback() {
+        let mut sparse = line(7);
+        sparse.block_groups.push(NfoRendererBlockGroup {
+            col: 12,
+            blocks: vec![NfoRendererBlockShape::FullBlock; 19],
+        });
+        let sparse_grid = grid_with_line(80, 25, 12, sparse);
+        let sparse_bounds = visible_bounds(&sparse_grid).unwrap();
+
+        assert_eq!(first_dense_block_row(&sparse_grid), None);
+        assert_eq!(sparse_bounds.content_top, 0);
+        assert!(sparse_bounds.contains(12, 7));
+
+        let mut text = line(4);
+        text.text_flights.push(NfoRendererTextFlight {
+            col: 6,
+            text: "text-only NFO".into(),
+        });
+        let text_grid = grid_with_line(80, 25, 13, text);
+        let text_bounds = visible_bounds(&text_grid).unwrap();
+
+        assert_eq!(first_dense_block_row(&text_grid), None);
+        assert_eq!(text_bounds.content_top, 0);
+        assert!(text_bounds.contains(6, 4));
+    }
+
+    #[test]
+    fn dense_anchor_uses_lowest_row_with_twenty_distinct_valid_blocks() {
+        let mut out_of_bounds = line(1);
+        out_of_bounds.block_groups.push(NfoRendererBlockGroup {
+            col: 80,
+            blocks: vec![NfoRendererBlockShape::FullBlock; 20],
+        });
+
+        let mut duplicates = line(2);
+        duplicates.block_groups.push(NfoRendererBlockGroup {
+            col: 0,
+            blocks: vec![NfoRendererBlockShape::FullBlock; 10],
+        });
+        duplicates.block_groups.push(NfoRendererBlockGroup {
+            col: 0,
+            blocks: vec![NfoRendererBlockShape::FullBlock; 10],
+        });
+
+        let mut whitespace = line(3);
+        whitespace.block_groups.push(NfoRendererBlockGroup {
+            col: 0,
+            blocks: vec![NfoRendererBlockShape::Whitespace; 20],
+        });
+
+        let mut later = line(12);
+        later.block_groups.push(NfoRendererBlockGroup {
+            col: 30,
+            blocks: vec![NfoRendererBlockShape::FullBlock; 20],
+        });
+
+        let mut earlier = line(5);
+        earlier.block_groups.push(NfoRendererBlockGroup {
+            col: 20,
+            blocks: vec![NfoRendererBlockShape::FullBlock; 20],
+        });
+
+        let grid = grid_with_lines(
+            80,
+            25,
+            14,
+            vec![later, whitespace, duplicates, earlier, out_of_bounds],
+        );
+
+        assert_eq!(first_dense_block_row(&grid), Some(5));
     }
 
     #[test]

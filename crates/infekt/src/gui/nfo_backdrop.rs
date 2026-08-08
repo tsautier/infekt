@@ -10,7 +10,8 @@ use crate::{
 pub(crate) const BACKDROP_WIDTH: u32 = 640;
 pub(crate) const BACKDROP_HEIGHT: u32 = 400;
 
-const ALGORITHM_VERSION: u8 = 3;
+const BACKDROP_TILE_WIDTH: u32 = BACKDROP_WIDTH / 2;
+const ALGORITHM_VERSION: u8 = 5;
 const CROP_MARGIN_CELLS: usize = 2;
 const LEADING_ART_BLOCK_THRESHOLD: usize = 20;
 const CANVAS_PADDING: f64 = 24.0;
@@ -215,6 +216,9 @@ impl RasterTransform {
         bounds: ContentBounds,
         character_ratio_milli: u16,
         horizontal_focal: f64,
+        vertical_focal: f64,
+        canvas_width: u32,
+        canvas_height: u32,
     ) -> Option<Self> {
         let crop_width = bounds.width();
         let crop_height = bounds.height();
@@ -223,24 +227,33 @@ impl RasterTransform {
             return None;
         }
 
-        let available_width = f64::from(BACKDROP_WIDTH) - CANVAS_PADDING * 2.0;
-        let available_height = f64::from(BACKDROP_HEIGHT) - CANVAS_PADDING * 2.0;
+        let available_width = f64::from(canvas_width) - CANVAS_PADDING * 2.0;
+        let available_height = f64::from(canvas_height) - CANVAS_PADDING * 2.0;
+
+        if available_width <= 0.0 || available_height <= 0.0 {
+            return None;
+        }
+
         let character_ratio = f64::from(character_ratio_milli) / 1_000.0;
         let cell_height = (available_width / (crop_width as f64 * character_ratio))
-            .min(available_height / crop_height as f64);
+            .max(available_height / crop_height as f64);
+
+        if !cell_height.is_finite() || cell_height <= 0.0 {
+            return None;
+        }
+
         let cell_width = cell_height * character_ratio;
         let rendered_width = cell_width * crop_width as f64;
         let rendered_height = cell_height * crop_height as f64;
-        let minimum_origin_x = CANVAS_PADDING;
-        let maximum_origin_x = f64::from(BACKDROP_WIDTH) - CANVAS_PADDING - rendered_width;
-        let focal_offset = (horizontal_focal - bounds.left as f64) * cell_width;
-        let origin_x = (f64::from(BACKDROP_WIDTH) * 0.5 - focal_offset)
-            .clamp(minimum_origin_x, maximum_origin_x.max(minimum_origin_x));
+        let focal_offset_x = (horizontal_focal - bounds.left as f64) * cell_width;
+        let focal_offset_y = (vertical_focal - bounds.top as f64) * cell_height;
+        let origin_x = cover_origin(f64::from(canvas_width), rendered_width, focal_offset_x);
+        let origin_y = cover_origin(f64::from(canvas_height), rendered_height, focal_offset_y);
 
         Some(Self {
             bounds,
             origin_x,
-            origin_y: (f64::from(BACKDROP_HEIGHT) - rendered_height) * 0.5,
+            origin_y,
             cell_width,
             cell_height,
         })
@@ -259,6 +272,14 @@ impl RasterTransform {
             bottom: top + self.cell_height,
         }
     }
+}
+
+fn cover_origin(canvas_extent: f64, rendered_extent: f64, focal_offset: f64) -> f64 {
+    let available_extent = canvas_extent - CANVAS_PADDING * 2.0;
+    let minimum_origin = (CANVAS_PADDING + available_extent - rendered_extent).min(CANVAS_PADDING);
+    let maximum_origin = CANVAS_PADDING;
+
+    (canvas_extent * 0.5 - focal_offset).clamp(minimum_origin, maximum_origin)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -285,16 +306,48 @@ impl PixelRect {
 
 fn rasterize(grid: &NfoRendererGrid, key: BackdropKey) -> Option<RgbaImage> {
     let bounds = visible_bounds(grid)?;
-    let horizontal_focal = horizontal_focal(grid, bounds, key);
-    let transform = RasterTransform::new(bounds, key.character_ratio_milli, horizontal_focal)?;
+    let (horizontal_focal, vertical_focal) = ink_focal(grid, bounds, key);
+    let transform = RasterTransform::new(
+        bounds,
+        key.character_ratio_milli,
+        horizontal_focal,
+        vertical_focal,
+        BACKDROP_TILE_WIDTH,
+        BACKDROP_HEIGHT,
+    )?;
     let background = ImageRgba([
         key.background_color[0],
         key.background_color[1],
         key.background_color[2],
         255,
     ]);
-    let mut image = RgbaImage::from_pixel(BACKDROP_WIDTH, BACKDROP_HEIGHT, background);
+    let mut tile = RgbaImage::from_pixel(BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT, background);
 
+    paint_grid(&mut tile, grid, bounds, transform, key);
+
+    // Mirror one cover-rendered tile instead of stretching the NFO.
+    // The matching center-edge pixels let the later full-image blur erase the
+    // change in direction without introducing a value seam.
+    let mirrored_tile = imageops::flip_horizontal(&tile);
+    let mut image = RgbaImage::from_pixel(BACKDROP_WIDTH, BACKDROP_HEIGHT, background);
+    imageops::replace(&mut image, &tile, 0, 0);
+    imageops::replace(
+        &mut image,
+        &mirrored_tile,
+        i64::from(BACKDROP_TILE_WIDTH),
+        0,
+    );
+
+    Some(image)
+}
+
+fn paint_grid(
+    image: &mut RgbaImage,
+    grid: &NfoRendererGrid,
+    bounds: ContentBounds,
+    transform: RasterTransform,
+    key: BackdropKey,
+) {
     for line in &grid.lines {
         if line.row >= grid.height || line.row < bounds.top || line.row >= bounds.bottom {
             continue;
@@ -315,7 +368,7 @@ fn rasterize(grid: &NfoRendererGrid, key: BackdropKey) -> Option<RgbaImage> {
                 };
                 let cell = transform.cell_rect(col, line.row);
                 blend_rect(
-                    &mut image,
+                    image,
                     cell.subrect(
                         relative_rect.left,
                         relative_rect.top,
@@ -345,12 +398,10 @@ fn rasterize(grid: &NfoRendererGrid, key: BackdropKey) -> Option<RgbaImage> {
                 let mark = transform
                     .cell_rect(col, line.row)
                     .subrect(0.16, 0.34, 0.84, 0.66);
-                blend_rect(&mut image, mark, key.text_color, TEXT_MARK_OPACITY);
+                blend_rect(image, mark, key.text_color, TEXT_MARK_OPACITY);
             }
         }
     }
-
-    Some(image)
 }
 
 /// Returns the center of mass of the ink that will actually be painted.
@@ -358,8 +409,9 @@ fn rasterize(grid: &NfoRendererGrid, key: BackdropKey) -> Option<RgbaImage> {
 /// Block area and shade opacity match `block_geometry`; ordinary text uses
 /// the same subdued mark dimensions and opacity as `rasterize`. The selected
 /// content bounds also exclude any sparse prelude before a dense art anchor.
-fn horizontal_focal(grid: &NfoRendererGrid, bounds: ContentBounds, key: BackdropKey) -> f64 {
-    let mut weighted_position = 0.0;
+fn ink_focal(grid: &NfoRendererGrid, bounds: ContentBounds, key: BackdropKey) -> (f64, f64) {
+    let mut weighted_col = 0.0;
+    let mut weighted_row = 0.0;
     let mut total_weight = 0.0;
     let art_alpha = f64::from(key.art_color[3]) / 255.0;
     let text_alpha = f64::from(key.text_color[3]) / 255.0;
@@ -386,9 +438,11 @@ fn horizontal_focal(grid: &NfoRendererGrid, bounds: ContentBounds, key: Backdrop
                 };
                 let area = (rect.right - rect.left) * (rect.bottom - rect.top);
                 let weight = area * f64::from(shade_opacity) * art_alpha;
-                let center = col as f64 + (rect.left + rect.right) * 0.5;
+                let center_col = col as f64 + (rect.left + rect.right) * 0.5;
+                let center_row = line.row as f64 + (rect.top + rect.bottom) * 0.5;
 
-                weighted_position += center * weight;
+                weighted_col += center_col * weight;
+                weighted_row += center_row * weight;
                 total_weight += weight;
             }
         }
@@ -411,16 +465,20 @@ fn horizontal_focal(grid: &NfoRendererGrid, bounds: ContentBounds, key: Backdrop
                     continue;
                 }
 
-                weighted_position += (col as f64 + 0.5) * text_weight;
+                weighted_col += (col as f64 + 0.5) * text_weight;
+                weighted_row += (line.row as f64 + 0.5) * text_weight;
                 total_weight += text_weight;
             }
         }
     }
 
     if total_weight > f64::EPSILON {
-        weighted_position / total_weight
+        (weighted_col / total_weight, weighted_row / total_weight)
     } else {
-        (bounds.left as f64 + bounds.right as f64) * 0.5
+        (
+            (bounds.left as f64 + bounds.right as f64) * 0.5,
+            (bounds.top as f64 + bounds.bottom as f64) * 0.5,
+        )
     }
 }
 
@@ -563,10 +621,12 @@ fn block_geometry(shape: &NfoRendererBlockShape) -> Option<(PixelRect, f32)> {
 }
 
 fn blend_rect(image: &mut RgbaImage, rect: PixelRect, color: [u8; 4], opacity: f32) {
-    let left = rect.left.floor().clamp(0.0, f64::from(BACKDROP_WIDTH)) as u32;
-    let top = rect.top.floor().clamp(0.0, f64::from(BACKDROP_HEIGHT)) as u32;
-    let right = rect.right.ceil().clamp(0.0, f64::from(BACKDROP_WIDTH)) as u32;
-    let bottom = rect.bottom.ceil().clamp(0.0, f64::from(BACKDROP_HEIGHT)) as u32;
+    let width = f64::from(image.width());
+    let height = f64::from(image.height());
+    let left = rect.left.floor().clamp(0.0, width) as u32;
+    let top = rect.top.floor().clamp(0.0, height) as u32;
+    let right = rect.right.ceil().clamp(0.0, width) as u32;
+    let bottom = rect.bottom.ceil().clamp(0.0, height) as u32;
     let source_alpha = (f32::from(color[3]) / 255.0 * opacity).clamp(0.0, 1.0);
 
     if left >= right || top >= bottom || source_alpha <= 0.0 {
@@ -665,6 +725,46 @@ mod tests {
             blocks: vec![shape],
         });
         grid_with_line(11, 11, 7, content)
+    }
+
+    fn repeat_energy_grid() -> NfoRendererGrid {
+        let mut anchor = line(100);
+        anchor.block_groups.push(NfoRendererBlockGroup {
+            col: 5,
+            blocks: vec![NfoRendererBlockShape::FullBlock; 70],
+        });
+        let mut trailing = line(180);
+        trailing.block_groups.push(NfoRendererBlockGroup {
+            col: 74,
+            blocks: vec![NfoRendererBlockShape::FullBlock],
+        });
+
+        grid_with_lines(80, 220, 20, vec![anchor, trailing])
+    }
+
+    fn high_contrast_settings() -> NfoRenderSettings {
+        NfoRenderSettings {
+            background_color: Rgb::new(0.0, 0.0, 0.0),
+            art_color: Rgba::new(1.0, 1.0, 1.0, 1.0),
+            ..NfoRenderSettings::default()
+        }
+    }
+
+    fn assert_cover(transform: RasterTransform, canvas_width: u32, canvas_height: u32) {
+        let epsilon = 1.0e-7;
+        let rendered_width = transform.cell_width * transform.bounds.width() as f64;
+        let rendered_height = transform.cell_height * transform.bounds.height() as f64;
+
+        assert!(transform.origin_x <= CANVAS_PADDING + epsilon);
+        assert!(
+            transform.origin_x + rendered_width
+                >= f64::from(canvas_width) - CANVAS_PADDING - epsilon
+        );
+        assert!(transform.origin_y <= CANVAS_PADDING + epsilon);
+        assert!(
+            transform.origin_y + rendered_height
+                >= f64::from(canvas_height) - CANVAS_PADDING - epsilon
+        );
     }
 
     #[test]
@@ -853,7 +953,7 @@ mod tests {
     }
 
     #[test]
-    fn asymmetric_eligible_ink_is_centered_when_padding_allows() {
+    fn asymmetric_eligible_ink_is_centered_on_the_overflowing_axis() {
         let mut prelude = line(8);
         prelude.block_groups.push(NfoRendererBlockGroup {
             col: 0,
@@ -865,30 +965,35 @@ mod tests {
             col: 30,
             blocks: vec![NfoRendererBlockShape::FullBlock; 20],
         });
-
-        let mut trailing = line(30);
-        trailing.block_groups.push(NfoRendererBlockGroup {
+        anchor.block_groups.push(NfoRendererBlockGroup {
             col: 70,
             blocks: vec![NfoRendererBlockShape::FullBlock],
         });
 
-        let grid = grid_with_lines(100, 40, 15, vec![prelude, trailing, anchor]);
+        let grid = grid_with_lines(100, 40, 15, vec![prelude, anchor]);
         let settings = NfoRenderSettings::default();
         let key = BackdropKey::new(&grid, &settings, 0.583);
         let bounds = visible_bounds(&grid).unwrap();
-        let focal = horizontal_focal(&grid, bounds, key);
-        let expected_focal = (20.0 * 40.0 + 70.5) / 21.0;
-        let transform = RasterTransform::new(bounds, key.character_ratio_milli, focal).unwrap();
-        let focal_pixel = transform.origin_x + (focal - bounds.left as f64) * transform.cell_width;
+        let (focal_x, focal_y) = ink_focal(&grid, bounds, key);
+        let expected_focal_x = (20.0 * 40.0 + 70.5) / 21.0;
+        let transform = RasterTransform::new(
+            bounds,
+            key.character_ratio_milli,
+            focal_x,
+            focal_y,
+            BACKDROP_TILE_WIDTH,
+            BACKDROP_HEIGHT,
+        )
+        .unwrap();
+        let focal_pixel_x =
+            transform.origin_x + (focal_x - bounds.left as f64) * transform.cell_width;
 
         assert_eq!(bounds.content_top, 10);
-        assert!((focal - expected_focal).abs() < 1.0e-9);
-        assert!((focal_pixel - f64::from(BACKDROP_WIDTH) * 0.5).abs() < 1.0e-9);
-        assert!(transform.origin_x >= CANVAS_PADDING);
-        assert!(
-            transform.origin_x + transform.cell_width * bounds.width() as f64
-                <= f64::from(BACKDROP_WIDTH) - CANVAS_PADDING + 1.0e-9
-        );
+        assert!((focal_x - expected_focal_x).abs() < 1.0e-9);
+        assert_eq!(focal_y, 10.5);
+        assert!((focal_pixel_x - f64::from(BACKDROP_TILE_WIDTH) * 0.5).abs() < 1.0e-9);
+        assert!(transform.origin_x < CANVAS_PADDING);
+        assert_cover(transform, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
     }
 
     #[test]
@@ -910,7 +1015,7 @@ mod tests {
         let settings = NfoRenderSettings::default();
         let key = BackdropKey::new(&grid, &settings, 0.583);
         let bounds = visible_bounds(&grid).unwrap();
-        let focal = horizontal_focal(&grid, bounds, key);
+        let (focal, focal_y) = ink_focal(&grid, bounds, key);
         let shade_weight = f64::from(90.0_f32 / 255.0);
         let half_weight = 0.5;
         let expected =
@@ -918,6 +1023,128 @@ mod tests {
 
         assert!((focal - expected).abs() < 1.0e-9);
         assert!(focal < (10.5 + 30.5 + 50.75) / 3.0);
+        assert_eq!(focal_y, 5.5);
+    }
+
+    #[test]
+    fn vertical_focal_uses_the_painted_geometry_center_and_weight() {
+        let mut upper = line(10);
+        upper.block_groups.push(NfoRendererBlockGroup {
+            col: 20,
+            blocks: vec![NfoRendererBlockShape::FullBlock],
+        });
+        let mut lower = line(30);
+        lower.block_groups.push(NfoRendererBlockGroup {
+            col: 20,
+            blocks: vec![NfoRendererBlockShape::LowerHalf],
+        });
+        let grid = grid_with_lines(50, 40, 19, vec![upper, lower]);
+        let settings = NfoRenderSettings::default();
+        let key = BackdropKey::new(&grid, &settings, 0.583);
+        let bounds = visible_bounds(&grid).unwrap();
+        let (focal_x, focal_y) = ink_focal(&grid, bounds, key);
+        let expected_y = (10.5 + 30.75 * 0.5) / 1.5;
+
+        assert_eq!(focal_x, 20.5);
+        assert!((focal_y - expected_y).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn cover_transform_clamps_extreme_focals_without_exposing_the_inset() {
+        let wide = ContentBounds {
+            left: 0,
+            top: 0,
+            right: 100,
+            bottom: 4,
+            content_top: 0,
+        };
+        let wide_left =
+            RasterTransform::new(wide, 583, 0.5, 2.0, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT)
+                .unwrap();
+        let wide_right =
+            RasterTransform::new(wide, 583, 99.5, 2.0, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT)
+                .unwrap();
+        let wide_rendered_width = wide_left.cell_width * wide.width() as f64;
+
+        assert_eq!(wide_left.origin_x, CANVAS_PADDING);
+        assert!(
+            (wide_right.origin_x
+                - (f64::from(BACKDROP_TILE_WIDTH) - CANVAS_PADDING - wide_rendered_width))
+                .abs()
+                < 1.0e-7
+        );
+        assert_cover(wide_left, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
+        assert_cover(wide_right, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
+
+        let tall = ContentBounds {
+            left: 0,
+            top: 0,
+            right: 4,
+            bottom: 100,
+            content_top: 0,
+        };
+        let tall_top =
+            RasterTransform::new(tall, 583, 2.0, 0.5, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT)
+                .unwrap();
+        let tall_bottom =
+            RasterTransform::new(tall, 583, 2.0, 99.5, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT)
+                .unwrap();
+        let tall_rendered_height = tall_top.cell_height * tall.height() as f64;
+
+        assert_eq!(tall_top.origin_y, CANVAS_PADDING);
+        assert!(
+            (tall_bottom.origin_y
+                - (f64::from(BACKDROP_HEIGHT) - CANVAS_PADDING - tall_rendered_height))
+                .abs()
+                < 1.0e-7
+        );
+        assert_cover(tall_top, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
+        assert_cover(tall_bottom, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
+    }
+
+    #[test]
+    fn cover_transform_remains_finite_for_extreme_aspect_ratios() {
+        let tall = ContentBounds {
+            left: 0,
+            top: 0,
+            right: 3,
+            bottom: 10_000,
+            content_top: 0,
+        };
+        let wide = ContentBounds {
+            left: 0,
+            top: 0,
+            right: 10_000,
+            bottom: 3,
+            content_top: 0,
+        };
+
+        for transform in [
+            RasterTransform::new(
+                tall,
+                583,
+                1.5,
+                5_000.0,
+                BACKDROP_TILE_WIDTH,
+                BACKDROP_HEIGHT,
+            )
+            .unwrap(),
+            RasterTransform::new(
+                wide,
+                583,
+                5_000.0,
+                1.5,
+                BACKDROP_TILE_WIDTH,
+                BACKDROP_HEIGHT,
+            )
+            .unwrap(),
+        ] {
+            assert!(transform.origin_x.is_finite());
+            assert!(transform.origin_y.is_finite());
+            assert!(transform.cell_width.is_finite());
+            assert!(transform.cell_height.is_finite());
+            assert_cover(transform, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
+        }
     }
 
     #[test]
@@ -932,7 +1159,7 @@ mod tests {
         let key = BackdropKey::new(&grid, &settings, 0.583);
         let bounds = visible_bounds(&grid).unwrap();
 
-        assert_eq!(horizontal_focal(&grid, bounds, key), 6.0);
+        assert_eq!(ink_focal(&grid, bounds, key), (6.0, 4.5));
     }
 
     #[test]
@@ -945,10 +1172,13 @@ mod tests {
         };
         let key = BackdropKey::new(&grid, &settings, 0.583);
         let bounds = visible_bounds(&grid).unwrap();
-        let expected = (bounds.left as f64 + bounds.right as f64) * 0.5;
+        let expected = (
+            (bounds.left as f64 + bounds.right as f64) * 0.5,
+            (bounds.top as f64 + bounds.bottom as f64) * 0.5,
+        );
 
         assert_eq!(bounds.content_top, 0);
-        assert_eq!(horizontal_focal(&grid, bounds, key), expected);
+        assert_eq!(ink_focal(&grid, bounds, key), expected);
 
         let empty = NfoRendererGrid {
             width: 80,
@@ -1040,6 +1270,57 @@ mod tests {
 
         assert!(blurred_non_background > raw_non_background);
         assert!(blurred.pixels().all(|pixel| pixel[3] == 255));
+    }
+
+    #[test]
+    fn mirror_repeat_distributes_blurred_energy_across_both_outer_quarters() {
+        let grid = repeat_energy_grid();
+        let settings = high_contrast_settings();
+        let key = BackdropKey::new(&grid, &settings, 0.583);
+        let raw = rasterize(&grid, key).unwrap();
+        let blurred = imageops::fast_blur(&raw, BLUR_SIGMA);
+        let quarter_width = BACKDROP_WIDTH / 4;
+
+        for quarter in [0, 3] {
+            let left = quarter * quarter_width;
+            let right = left + quarter_width;
+            let energetic_pixels = (0..BACKDROP_HEIGHT)
+                .flat_map(|y| (left..right).map(move |x| (x, y)))
+                .filter(|&(x, y)| blurred.get_pixel(x, y)[0] >= 12)
+                .count();
+            let quarter_pixels = (quarter_width * BACKDROP_HEIGHT) as usize;
+
+            assert!(
+                energetic_pixels * 10 >= quarter_pixels,
+                "outer quarter {quarter} contained too little ambient energy"
+            );
+        }
+    }
+
+    #[test]
+    fn mirror_repeat_has_no_abrupt_center_seam_after_blur() {
+        let grid = repeat_energy_grid();
+        let settings = high_contrast_settings();
+        let key = BackdropKey::new(&grid, &settings, 0.583);
+        let raw = rasterize(&grid, key).unwrap();
+        let blurred = imageops::fast_blur(&raw, BLUR_SIGMA);
+        let seam_left = BACKDROP_TILE_WIDTH - 1;
+        let seam_right = BACKDROP_TILE_WIDTH;
+        let mut maximum_jump = 0;
+
+        for y in 0..BACKDROP_HEIGHT {
+            for channel in 0..3 {
+                maximum_jump = maximum_jump.max(
+                    blurred.get_pixel(seam_left, y)[channel]
+                        .abs_diff(blurred.get_pixel(seam_right, y)[channel]),
+                );
+            }
+        }
+
+        assert!(
+            maximum_jump <= 1,
+            "center seam changed by {maximum_jump} levels after blur"
+        );
     }
 
     #[test]

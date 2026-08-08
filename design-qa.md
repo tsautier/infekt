@@ -119,4 +119,22 @@ No actionable P0, P1, or P2 visual differences remain within the agreed renderer
 
 No actionable P0, P1, or P2 shell/backdrop differences remain for the corrected inspector-local direction.
 
+## Seamless Gutters and Opaque NFO Paper Follow-up
+
+- User-directed correction: reveal one continuous ambient backdrop under the toolbar, both viewer gutters, and the complete Presentation inspector, while keeping only the rendered NFO bounds plus 24px padding fully opaque.
+- Validation file: `/Users/ir/Downloads/xrel-movie-3235328.nfo` (`80×220`, CP 437), loaded unchanged.
+- Bright Enhanced implementation: `/private/tmp/infekt-seamless-paper-bright-final-v4.png` (1440 × 987 native window capture).
+- Dark Enhanced implementation: `/private/tmp/infekt-seamless-paper-dark-final.png` (1440 × 987 native window capture).
+- Bright Classic implementation: `/private/tmp/infekt-seamless-paper-classic-final.png` (1440 × 987 native window capture).
+- Full same-input comparisons: `/private/tmp/infekt-seamless-paper-bright-comparison.png` and `/private/tmp/infekt-seamless-paper-dark-comparison.png`.
+- Focused gutter/inspector comparisons: `/private/tmp/infekt-seamless-paper-bright-focused.png` and `/private/tmp/infekt-seamless-paper-dark-focused.png`.
+- **P2 — Intrinsic NFO surface was initially left-aligned.** Replaced the ordinary container composition with a dedicated `NfoPaper` widget. It reports the renderer's intrinsic dimensions plus equal 24px padding, centers itself only when it fits, and preserves the left scroll origin when the paper is wider than the viewport. Enhanced, Classic, and Text Only share this behavior.
+- **P2 — A single center-weighted cover image disappeared beneath the opaque paper.** The fixed 640×400 raster now uses two 320×400 cover-composed halves from the same eligible NFO content, with the second half mirrored. The complete field is blurred after composition, so both outer viewer gutters retain recognizable color energy without a hard center seam or wallpaper edge.
+- **Layer continuity:** one root image sits below the toolbar and complete content row. Viewer and toolbar scrims, the inspector glass, and the opaque NFO paper are all foreground layers over that same image; there is no inspector-local copy, independent crop, or phase shift. The field remains fixed while the NFO and inspector scroll.
+- **Paper isolation:** the exact selected NFO background color is drawn at alpha 1 only behind intrinsic foreground content plus padding. The surrounding viewer is translucent, so short and narrow files reveal both side gutters and the area below the paper; large files retain normal bidirectional scrolling.
+- **Bright/dark calibration:** Neon Pasture keeps the specified stronger dark ambience. Cobalt Paper uses 0.70 image transmission and a 0.80 viewer scrim so the repeated wash remains visible in exposed gutters while the paper stays clean white; the toolbar remains quieter and the inspector retains its stronger glass material.
+- **Fidelity and assets:** typography, toolbar zones, control copy, theme wells, Tabler icons, foreground geometry, and native window treatment remain unchanged. The source and implementation use different NFO artwork, so the comparison judges opacity boundaries, spatial continuity, atmosphere, and shell hierarchy rather than matching blurred contours.
+- **Renderer boundary:** no decoding, grid generation, ANSI, hyperlinks, wrapping, Glow, export, or foreground rendering semantics changed. Backdrop generation remains fixed-size, asynchronous, cache-keyed, and stale-result safe.
+- The final bright, dark, and Classic captures confirm equal side gutters, an opaque shrink-wrapped document surface, seamless continuation beneath the inspector to its bottom edge, and subtle backdrop transmission through the toolbar. No actionable P0, P1, or P2 differences remain for this corrected composition.
+
 final result: passed

@@ -2,16 +2,17 @@ mod classic_view;
 
 use std::sync::Arc;
 
-use iced::Element;
 use iced::Length::Fill;
 use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::{self, scrollable};
+use iced::{Color, Element};
 
 use crate::app::Action;
 use crate::core::nfo_data::NfoData;
 use crate::settings::NfoRenderSettings;
 
 use super::widget::enhanced_nfo_view::EnhancedNfoView;
+use super::widget::nfo_paper::NfoPaper;
 
 #[derive(Default)]
 pub struct InfektMainView {
@@ -56,17 +57,49 @@ impl InfektMainView {
     }
 
     fn enhanced_tab<'a>(&self, current_nfo: &'a NfoData) -> Element<'a, Message> {
-        scrollable(EnhancedNfoView::new(
-            self.active_render_settings.clone(),
-            current_nfo,
-        ))
-        .id(widget::Id::new("enhanced view"))
-        .direction(Direction::Both {
-            vertical: Scrollbar::default(),
-            horizontal: Scrollbar::default(),
-        })
-        .width(Fill)
-        .height(Fill)
-        .into()
+        let nfo = EnhancedNfoView::new(self.active_render_settings.clone(), current_nfo);
+        let content: Element<'a, Message> = if current_nfo.is_loaded() {
+            NfoPaper::new(nfo, nfo_paper_color(self.active_render_settings.as_ref())).into()
+        } else {
+            nfo.into()
+        };
+
+        scrollable(content)
+            .id(widget::Id::new("enhanced view"))
+            .direction(Direction::Both {
+                vertical: Scrollbar::default(),
+                horizontal: Scrollbar::default(),
+            })
+            .width(Fill)
+            .height(Fill)
+            .into()
+    }
+}
+
+pub(super) fn nfo_paper_color(settings: &NfoRenderSettings) -> Color {
+    let background = settings.background_color;
+
+    Color::from_rgb(background.red, background.green, background.blue)
+}
+
+#[cfg(test)]
+mod tests {
+    use iced::Color;
+    use palette::rgb::Rgb;
+
+    use super::nfo_paper_color;
+    use crate::settings::NfoRenderSettings;
+
+    #[test]
+    fn nfo_paper_uses_the_exact_opaque_theme_background() {
+        let settings = NfoRenderSettings {
+            background_color: Rgb::new(0.125, 0.25, 0.75),
+            ..NfoRenderSettings::default()
+        };
+
+        let background = nfo_paper_color(&settings);
+
+        assert_eq!(background, Color::from_rgb(0.125, 0.25, 0.75));
+        assert_eq!(background.a, 1.0);
     }
 }

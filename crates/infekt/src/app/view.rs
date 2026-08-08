@@ -28,7 +28,8 @@ impl InfektApp {
     pub fn view(&self) -> Element<'_, Message> {
         let tokens = ShellTokens::from(&self.active_render_settings);
         let backdrop = self.backdrop.current_handle().cloned();
-        let toolbar = self.toolbar(tokens);
+        let has_backdrop = backdrop.is_some();
+        let toolbar = self.toolbar(tokens, has_backdrop);
         let viewer = container(
             self.main_view
                 .view(&self.current_nfo)
@@ -36,7 +37,14 @@ impl InfektApp {
         )
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(shell_style::surface(tokens, SurfaceRole::Canvas));
+        .style(shell_style::surface(
+            tokens,
+            if has_backdrop {
+                SurfaceRole::BackdropCanvas
+            } else {
+                SurfaceRole::Canvas
+            },
+        ));
 
         let content: Element<'_, Message> = if self.presentation.inspector_open {
             let inspector = self
@@ -47,30 +55,17 @@ impl InfektApp {
                     &self.current_nfo,
                 )
                 .map(Message::Inspector);
-            let inspector: Element<'_, Message> = if let Some(handle) = backdrop {
-                stack![
-                    iced::widget::image(handle)
-                        .width(Length::Fill)
-                        .height(Length::Fill)
-                        .content_fit(ContentFit::Cover)
-                        .filter_method(iced::widget::image::FilterMethod::Linear)
-                        .scale(1.10_f32)
-                        .opacity(if tokens.is_dark { 0.82_f32 } else { 0.55_f32 }),
-                    container(inspector)
-                        .width(Length::Fill)
-                        .height(Length::Fill)
-                        .style(shell_style::surface(tokens, SurfaceRole::BackdropInspector)),
-                ]
+            let inspector = container(inspector)
                 .width(INSPECTOR_WIDTH)
                 .height(Length::Fill)
-                .into()
-            } else {
-                container(inspector)
-                    .width(INSPECTOR_WIDTH)
-                    .height(Length::Fill)
-                    .style(shell_style::surface(tokens, SurfaceRole::Inspector))
-                    .into()
-            };
+                .style(shell_style::surface(
+                    tokens,
+                    if has_backdrop {
+                        SurfaceRole::BackdropInspector
+                    } else {
+                        SurfaceRole::Inspector
+                    },
+                ));
 
             row![viewer, inspector].height(Length::Fill).into()
         } else {
@@ -86,7 +81,21 @@ impl InfektApp {
             .height(Length::Fill)
             .style(move |_| container::Style::default().color(tokens.text));
 
-        let root = stack![base, shell].width(Length::Fill).height(Length::Fill);
+        let mut root = stack![base].width(Length::Fill).height(Length::Fill);
+
+        if let Some(handle) = backdrop {
+            root = root.push(
+                iced::widget::image(handle)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .content_fit(ContentFit::Cover)
+                    .filter_method(iced::widget::image::FilterMethod::Linear)
+                    .scale(1.08_f32)
+                    .opacity(if tokens.is_dark { 0.82_f32 } else { 0.70_f32 }),
+            );
+        }
+
+        root = root.push(shell);
 
         let mut layers = stack![root].width(Length::Fill).height(Length::Fill);
 
@@ -97,12 +106,19 @@ impl InfektApp {
         layers.into()
     }
 
-    fn toolbar(&self, tokens: ShellTokens) -> Element<'_, Message> {
+    fn toolbar(&self, tokens: ShellTokens, has_backdrop: bool) -> Element<'_, Message> {
         container(self.toolbar_contents(tokens))
             .padding([8, 12])
             .height(TOOLBAR_HEIGHT)
             .width(Length::Fill)
-            .style(shell_style::surface(tokens, SurfaceRole::Toolbar))
+            .style(shell_style::surface(
+                tokens,
+                if has_backdrop {
+                    SurfaceRole::BackdropToolbar
+                } else {
+                    SurfaceRole::Toolbar
+                },
+            ))
             .into()
     }
 

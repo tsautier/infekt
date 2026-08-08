@@ -111,9 +111,9 @@ impl<Message, Theme> Widget<Message, Theme, Renderer> for EnhancedNfoView<'_> {
     ) {
         use iced::advanced::Renderer as _;
 
-        if self.renderer_grid.is_none() {
+        let Some(grid) = self.renderer_grid else {
             return;
-        }
+        };
 
         /*println!(
             "NfoViewEnhanced::draw() - viewport: {:?} - bounds: {:?}",
@@ -132,18 +132,23 @@ impl<Message, Theme> Widget<Message, Theme, Renderer> for EnhancedNfoView<'_> {
             return;
         }
 
-        renderer.start_layer(*viewport);
-
-        let first_visible_line =
-            ((viewport.y - bounds.y) / self.block_height_float).floor() as usize;
-        let last_visible_line =
-            first_visible_line + (viewport.height / self.block_height_float).ceil() as usize;
+        let Some((first_visible_line, last_visible_line)) = visible_line_range(
+            bounds.y,
+            self.block_height_float,
+            grid.height,
+            viewport.y,
+            viewport.height,
+        ) else {
+            return;
+        };
 
         let first_cache_index = first_visible_line / CACHE_STRIDE_LINES;
-        let last_cache_index = last_visible_line / CACHE_STRIDE_LINES;
+        let last_cache_index = (last_visible_line / CACHE_STRIDE_LINES).min(state.cache.len() - 1);
+
+        renderer.start_layer(*viewport);
 
         let cache_bounds = Size {
-            width: self.block_width_float * self.renderer_grid.unwrap().width as f32,
+            width: self.block_width_float * grid.width as f32,
             height: CACHE_STRIDE_LINES as f32 * self.block_height_float,
         };
 
@@ -159,8 +164,6 @@ impl<Message, Theme> Widget<Message, Theme, Renderer> for EnhancedNfoView<'_> {
                     .get(cache_index)
                     .unwrap()
                     .draw(renderer, cache_bounds, |frame| {
-                        let grid = self.renderer_grid.unwrap();
-
                         for line in &grid.lines {
                             if line.row < first_line || line.row > last_line {
                                 continue;
@@ -206,12 +209,7 @@ impl<Message, Theme> Widget<Message, Theme, Renderer> for EnhancedNfoView<'_> {
                         );
                     });
 
-            let nfo_width_float = self.block_width_float * self.renderer_grid.unwrap().width as f32;
-
-            let bounds_translation = Vector::new(
-                (bounds.x + (viewport.width - nfo_width_float) * 0.5).max(bounds.x), // center horizontally
-                bounds.y + y_offset,
-            );
+            let bounds_translation = Vector::new(bounds.x, bounds.y + y_offset);
 
             renderer.with_translation(bounds_translation, |renderer| {
                 use iced::advanced::graphics::geometry::Renderer as _;
@@ -222,6 +220,33 @@ impl<Message, Theme> Widget<Message, Theme, Renderer> for EnhancedNfoView<'_> {
 
         renderer.end_layer();
     }
+}
+
+fn visible_line_range(
+    content_top: f32,
+    line_height: f32,
+    line_count: usize,
+    viewport_top: f32,
+    viewport_height: f32,
+) -> Option<(usize, usize)> {
+    if line_count == 0 || line_height <= 0.0 || viewport_height <= 0.0 {
+        return None;
+    }
+
+    let content_height = line_count as f32 * line_height;
+    let visible_top = (viewport_top - content_top).clamp(0.0, content_height);
+    let visible_bottom = (viewport_top + viewport_height - content_top).clamp(0.0, content_height);
+
+    if visible_top >= visible_bottom {
+        return None;
+    }
+
+    let first = (visible_top / line_height).floor() as usize;
+    let last = ((visible_bottom / line_height).ceil() as usize)
+        .saturating_sub(1)
+        .min(line_count - 1);
+
+    Some((first, last))
 }
 
 impl EnhancedNfoView<'_> {
@@ -351,5 +376,39 @@ fn draw_block(
 impl<'a, Message, Theme> From<EnhancedNfoView<'a>> for Element<'a, Message, Theme, Renderer> {
     fn from(w: EnhancedNfoView<'a>) -> Self {
         Self::new(w)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CACHE_STRIDE_LINES, visible_line_range};
+
+    #[test]
+    fn visible_lines_ignore_padding_outside_the_rendered_grid() {
+        assert_eq!(visible_line_range(24.0, 12.0, 10, 0.0, 48.0), Some((0, 1)));
+        assert_eq!(visible_line_range(24.0, 12.0, 10, 144.0, 24.0), None);
+    }
+
+    #[test]
+    fn visible_lines_clamp_at_the_last_rendered_row() {
+        for line_count in [99, 100, 101] {
+            let content_top = 24.0;
+            let content_bottom = content_top + line_count as f32 * 12.0;
+            let range =
+                visible_line_range(content_top, 12.0, line_count, content_bottom - 12.0, 36.0);
+
+            assert_eq!(range, Some((line_count - 1, line_count - 1)));
+
+            let last_cache = range.unwrap().1 / CACHE_STRIDE_LINES;
+            let cache_count = line_count / CACHE_STRIDE_LINES + 1;
+            assert!(last_cache < cache_count);
+        }
+    }
+
+    #[test]
+    fn visible_lines_handle_empty_and_exact_boundaries() {
+        assert_eq!(visible_line_range(24.0, 12.0, 0, 24.0, 120.0), None);
+        assert_eq!(visible_line_range(24.0, 12.0, 4, 36.0, 24.0), Some((1, 2)));
+        assert_eq!(visible_line_range(24.0, 0.0, 4, 24.0, 48.0), None);
     }
 }

@@ -137,8 +137,11 @@ impl From<Arc<NfoRenderSettings>> for ShellTokens {
 pub(crate) enum SurfaceRole {
     Root,
     Canvas,
+    BackdropCanvas,
     Toolbar,
+    BackdropToolbar,
     Inspector,
+    BackdropInspector,
     Glass,
     ModalGlass,
     Raised,
@@ -157,8 +160,26 @@ fn surface_appearance(tokens: ShellTokens, role: SurfaceRole) -> container::Styl
     let (background, border, shadow): (Background, Border, Shadow) = match role {
         SurfaceRole::Root => (tokens.root.into(), Border::default(), Shadow::default()),
         SurfaceRole::Canvas => (tokens.canvas.into(), Border::default(), Shadow::default()),
+        SurfaceRole::BackdropCanvas => (
+            layer(tokens.canvas, if tokens.is_dark { 0.78 } else { 0.88 }).into(),
+            Border::default(),
+            Shadow::default(),
+        ),
         SurfaceRole::Toolbar => (
             tokens.toolbar.into(),
+            Border {
+                color: tokens.border,
+                width: 0.75,
+                radius: 0.0.into(),
+            },
+            Shadow::default(),
+        ),
+        SurfaceRole::BackdropToolbar => (
+            layer(
+                composite(tokens.toolbar, tokens.root),
+                if tokens.is_dark { 0.86 } else { 0.92 },
+            )
+            .into(),
             Border {
                 color: tokens.border,
                 width: 0.75,
@@ -197,6 +218,48 @@ fn surface_appearance(tokens: ShellTokens, role: SurfaceRole) -> container::Styl
                 ..tokens.shadow
             },
         ),
+        SurfaceRole::BackdropInspector => {
+            let opacity = if tokens.is_dark { 0.64 } else { 0.82 };
+            let glass = composite(tokens.glass, tokens.root);
+
+            (
+                gradient::Linear::new(2.15)
+                    .add_stop(
+                        0.0,
+                        layer(
+                            mix(
+                                glass,
+                                tokens.secondary_accent,
+                                if tokens.is_dark { 0.16 } else { 0.07 },
+                            ),
+                            opacity,
+                        ),
+                    )
+                    .add_stop(0.52, layer(glass, opacity))
+                    .add_stop(
+                        1.0,
+                        layer(
+                            mix(
+                                glass,
+                                tokens.accent,
+                                if tokens.is_dark { 0.10 } else { 0.04 },
+                            ),
+                            opacity,
+                        ),
+                    )
+                    .into(),
+                Border {
+                    color: tokens.border,
+                    width: 0.75,
+                    radius: 0.0.into(),
+                },
+                Shadow {
+                    offset: Vector::new(-3.0, 0.0),
+                    blur_radius: 18.0,
+                    ..tokens.shadow
+                },
+            )
+        }
         SurfaceRole::Glass => (
             tokens.glass.into(),
             tokens.panel_border(tokens.border),
@@ -695,5 +758,55 @@ mod tests {
                     .all(|stop| stop.color.a == 1.0)
             );
         }
+    }
+
+    #[test]
+    fn backdrop_surface_scrims_use_the_specified_dark_opacities() {
+        let tokens = ShellTokens::from_settings(&NfoRenderSettings {
+            background_color: Rgb::new(0.01, 0.02, 0.02),
+            ..NfoRenderSettings::default()
+        });
+
+        assert_surface_alpha(tokens, SurfaceRole::BackdropCanvas, 0.78);
+        assert_surface_alpha(tokens, SurfaceRole::BackdropToolbar, 0.86);
+        assert_inspector_gradient(tokens, 0.64);
+    }
+
+    #[test]
+    fn backdrop_surface_scrims_use_the_specified_light_opacities() {
+        let tokens = ShellTokens::from_settings(&NfoRenderSettings::default());
+
+        assert_surface_alpha(tokens, SurfaceRole::BackdropCanvas, 0.88);
+        assert_surface_alpha(tokens, SurfaceRole::BackdropToolbar, 0.92);
+        assert_inspector_gradient(tokens, 0.82);
+    }
+
+    fn assert_surface_alpha(tokens: ShellTokens, role: SurfaceRole, expected: f32) {
+        let style = surface_appearance(tokens, role);
+        let Some(Background::Color(background)) = style.background else {
+            panic!("backdrop canvas and toolbar must use color backgrounds");
+        };
+
+        assert_eq!(background.a, expected);
+    }
+
+    fn assert_inspector_gradient(tokens: ShellTokens, expected_alpha: f32) {
+        let style = surface_appearance(tokens, SurfaceRole::BackdropInspector);
+        let Some(Background::Gradient(gradient::Gradient::Linear(gradient))) = style.background
+        else {
+            panic!("backdrop inspector must use a linear gradient");
+        };
+        let stops = gradient.stops.iter().flatten().collect::<Vec<_>>();
+
+        assert_eq!(stops.len(), 3);
+        assert_eq!(stops[0].offset, 0.0);
+        assert_eq!(stops[1].offset, 0.52);
+        assert_eq!(stops[2].offset, 1.0);
+        assert!(stops.iter().all(|stop| stop.color.a == expected_alpha));
+        assert_ne!(stops[0].color, stops[1].color);
+        assert_ne!(stops[1].color, stops[2].color);
+        assert_eq!(style.border.width, 0.75);
+        assert_eq!(style.shadow.offset, Vector::new(-3.0, 0.0));
+        assert_eq!(style.shadow.blur_radius, 18.0);
     }
 }

@@ -83,4 +83,21 @@ No actionable P0, P1, or P2 visual differences remain within the agreed renderer
 - **Copy and content:** Export is always labeled; dimensions and charset remain directly adjacent to the filename; no toolbar identity label was reintroduced.
 - Post-fix combined and responsive evidence shows no actionable P0, P1, or P2 difference. The source's older brand/action details are expected user-directed overrides.
 
+## NFO-Derived Ambient Backdrop Follow-up
+
+- User-provided validation file: `/Users/ir/Downloads/xrel-movie-3235328.nfo` (`80×220`, CP 437), used unchanged in every implementation capture.
+- Dark implementation: `/private/tmp/infekt-backdrop-dark-v1.png` (3104 × 2198 capture; alpha-cropped native window 2880 × 1974, or 1440 × 987 logical pixels).
+- Bright implementation: `/private/tmp/infekt-backdrop-bright-v1.png` (same dimensions and native state, using Cobalt Paper).
+- Mode and inspector evidence: `/private/tmp/infekt-backdrop-classic-v1.png` and `/private/tmp/infekt-backdrop-text-collapsed-v1.png`.
+- Minimum-width evidence: `/private/tmp/infekt-backdrop-dark-900-v1.png` (2024 × 1488 capture of the 900-point minimum-width window with the inspector open).
+- Full combined comparisons: `/private/tmp/infekt-backdrop-qa-dark-combined.png` and `/private/tmp/infekt-backdrop-qa-bright-combined.png`. Each source and alpha-cropped implementation window was proportionally normalized to 1440px wide and stacked with an 8px separator.
+- Focused combined comparisons: `/private/tmp/infekt-backdrop-qa-dark-focused.png` and `/private/tmp/infekt-backdrop-qa-bright-focused.png`, placing the approved and implemented ambient edge/inspector regions in the same image at equal width.
+- The approved source artwork is not present in the repository, so backdrop QA compares the requested depth treatment, layer ordering, theme response, fixed positioning, and inspector/toolbar transmission—not identical blurred contours or colors. The real validation file supplies representative tall block art and ordinary text.
+- **P2 — Shell had no NFO-derived depth layer.** Added one fixed 640 × 400 theme-colored NFO raster beneath the complete toolbar/content shell. It is cropped to visible content, fitted with padding, blurred at sigma 28, displayed with cover plus 1.08× overscan, and restrained by the specified dark/bright canvas, toolbar, and inspector scrims.
+- **Renderer boundary:** the foreground geometry remains the existing renderer output. Only the Enhanced view's viewport-wide opaque fill was removed so the shell scrim can reveal the ambient image; decoding, grid creation, ANSI interpretation, links, wrapping, Glow, and export are unchanged.
+- **Lifecycle and stability:** the cache key includes only grid identity, backdrop colors, and the rounded character ratio. New file/theme/ratio state clears stale pixels immediately; cancellation preserves the current image; failed loads clear it; stale asynchronous results are rejected. Zoom, Glow, view mode, scrolling, font size, and inspector state do not regenerate it.
+- **Theme fidelity:** Neon Pasture exposes the deeper cyan ambient silhouette through the dark canvas and accent-tinted inspector. Cobalt Paper uses the intentionally quieter bright-mode opacity while retaining a visible blue haze. Empty state continues to use the original opaque shell gradient.
+- **Responsive and interaction evidence:** Enhanced, Classic, and Text Only retain the same backdrop; collapsing the inspector expands the crisp viewer without replacing the image; the 900-point capture preserves toolbar controls, artwork, scrolling area, and inspector. The About layer remains above the complete backdrop/shell stack.
+- **Required fidelity surfaces:** typography, spacing, toolbar grouping, theme colors, existing Tabler assets, metadata copy, and foreground NFO sharpness remain unchanged. No actionable P0, P1, or P2 shell/backdrop differences remain within the approved renderer boundary.
+
 final result: passed

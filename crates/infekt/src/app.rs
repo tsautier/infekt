@@ -11,6 +11,7 @@ use iced::{Task, Theme};
 use crate::core::nfo_data::NfoData;
 use crate::gui::about_screen::{self, InfektAboutScreen};
 use crate::gui::main_view::{self, InfektMainView};
+use crate::gui::nfo_backdrop::{BackdropImage, BackdropKey, NfoBackdrop};
 use crate::gui::presentation_inspector::{self, PresentationInspector};
 use crate::presentation::PresentationState;
 use crate::settings::NfoRenderSettings;
@@ -30,6 +31,7 @@ pub(crate) enum Message {
     ToggleOverflow,
     ShowAbout,
     CloseAbout,
+    BackdropReady(BackdropKey, u64, Option<BackdropImage>),
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +48,7 @@ pub(crate) struct InfektApp {
     presentation_inspector: PresentationInspector,
     about_screen: InfektAboutScreen,
     presentation: PresentationState,
+    backdrop: NfoBackdrop,
     theme: Option<Theme>,
     active_render_settings: Arc<NfoRenderSettings>,
     current_nfo: NfoData,
@@ -94,6 +97,8 @@ impl InfektApp {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let mut follow_up = Task::none();
+
         let action = match message {
             Message::NoOp => Action::None,
             Message::MainWindowCreated(window_id) => {
@@ -111,21 +116,38 @@ impl InfektApp {
 
                 if result == presentation_inspector::Update::RenderSettingsChanged {
                     self.apply_render_settings(settings);
+                    follow_up = self.ensure_backdrop();
                 }
 
                 Action::None
             }
             Message::About(message) => self.about_screen.update(message),
             Message::OpenFileDialog => Action::SelectFileForOpening,
-            Message::OpenFile(file) => self.action_load_new_nfo(file),
+            Message::OpenFile(file) => {
+                let should_refresh_backdrop = file.is_some();
+
+                if should_refresh_backdrop {
+                    self.backdrop.invalidate_source();
+                }
+
+                let action = self.action_load_new_nfo(file);
+
+                if should_refresh_backdrop {
+                    follow_up = self.ensure_backdrop();
+                }
+
+                action
+            }
             Message::ZoomIn => {
                 self.presentation.zoom_in();
                 self.apply_current_zoom();
+                follow_up = self.ensure_backdrop();
                 Action::None
             }
             Message::ZoomOut => {
                 self.presentation.zoom_out();
                 self.apply_current_zoom();
+                follow_up = self.ensure_backdrop();
                 Action::None
             }
             Message::ToggleInspector => {
@@ -151,13 +173,19 @@ impl InfektApp {
                 self.presentation.about_open = false;
                 Action::None
             }
+            Message::BackdropReady(key, generation, image) => {
+                self.backdrop.accept_result(key, generation, image);
+                Action::None
+            }
         };
 
-        match action {
+        let action_task = match action {
             Action::None => Task::none(),
             Action::SelectFileForOpening => self.task_open_nfo_file_dialog(),
             Action::ShowErrorMessage(message) => self.show_error_message_popup(message),
-        }
+        };
+
+        Task::batch([action_task, follow_up])
     }
 
     pub fn theme(&self) -> Option<Theme> {
@@ -179,6 +207,22 @@ impl InfektApp {
             .update(main_view::Message::RenderSettingsChanged(Arc::clone(
                 &self.active_render_settings,
             )));
+    }
+
+    fn ensure_backdrop(&mut self) -> Task<Message> {
+        let Some(request) = self.backdrop.request(
+            self.current_nfo.get_renderer_grid(),
+            self.active_render_settings.as_ref(),
+            self.presentation.character_ratio,
+        ) else {
+            return Task::none();
+        };
+        let key = request.key();
+        let generation = request.generation();
+
+        Task::perform(async move { request.generate() }, move |image| {
+            Message::BackdropReady(key, generation, image)
+        })
     }
 }
 

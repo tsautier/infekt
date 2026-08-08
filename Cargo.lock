@@ -2108,6 +2108,7 @@ dependencies = [
  "fontdb",
  "iced",
  "ico",
+ "image",
  "infekt-core",
  "open",
  "palette",

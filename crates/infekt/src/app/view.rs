@@ -1,6 +1,6 @@
 use iced::gradient;
 use iced::widget::{button, column, container, opaque, row, space, stack, svg, text};
-use iced::{Alignment, Background, Color, Element, Length, Theme};
+use iced::{Alignment, Background, Color, ContentFit, Element, Length, Theme};
 
 use crate::gui::main_view::{self, TabId};
 use crate::gui::shell_style::{self, ButtonRole, ShellTokens, SurfaceRole};
@@ -26,7 +26,9 @@ const CLOSE_ICON: &[u8] = include_bytes!("../../../../third_party/tabler-icons/o
 impl InfektApp {
     pub fn view(&self) -> Element<'_, Message> {
         let tokens = ShellTokens::from(&self.active_render_settings);
-        let toolbar = self.toolbar(tokens);
+        let backdrop = self.backdrop.current_handle().cloned();
+        let has_backdrop = backdrop.is_some();
+        let toolbar = self.toolbar(tokens, has_backdrop);
         let viewer = container(
             self.main_view
                 .view(&self.current_nfo)
@@ -34,7 +36,14 @@ impl InfektApp {
         )
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(shell_style::surface(tokens, SurfaceRole::Canvas));
+        .style(shell_style::surface(
+            tokens,
+            if has_backdrop {
+                SurfaceRole::BackdropCanvas
+            } else {
+                SurfaceRole::Canvas
+            },
+        ));
 
         let content: Element<'_, Message> = if self.presentation.inspector_open {
             let inspector = self
@@ -50,7 +59,14 @@ impl InfektApp {
                 viewer,
                 container(inspector)
                     .height(Length::Fill)
-                    .style(shell_style::surface(tokens, SurfaceRole::Inspector)),
+                    .style(shell_style::surface(
+                        tokens,
+                        if has_backdrop {
+                            SurfaceRole::BackdropInspector
+                        } else {
+                            SurfaceRole::Inspector
+                        },
+                    )),
             ]
             .height(Length::Fill)
             .into()
@@ -58,10 +74,30 @@ impl InfektApp {
             viewer.into()
         };
 
-        let root = container(column![toolbar, content].height(Length::Fill))
+        let base = container(space::horizontal())
             .width(Length::Fill)
             .height(Length::Fill)
             .style(move |_| root_style(tokens));
+        let shell = container(column![toolbar, content].height(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(move |_| container::Style::default().color(tokens.text));
+
+        let mut root = stack![base].width(Length::Fill).height(Length::Fill);
+
+        if let Some(handle) = backdrop {
+            root = root.push(
+                iced::widget::image(handle)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .content_fit(ContentFit::Cover)
+                    .filter_method(iced::widget::image::FilterMethod::Linear)
+                    .scale(1.08_f32)
+                    .opacity(if tokens.is_dark { 0.82_f32 } else { 0.55_f32 }),
+            );
+        }
+
+        root = root.push(shell);
 
         let mut layers = stack![root].width(Length::Fill).height(Length::Fill);
 
@@ -72,12 +108,19 @@ impl InfektApp {
         layers.into()
     }
 
-    fn toolbar(&self, tokens: ShellTokens) -> Element<'_, Message> {
+    fn toolbar(&self, tokens: ShellTokens, has_backdrop: bool) -> Element<'_, Message> {
         container(self.toolbar_contents(tokens))
             .padding([8, 12])
             .height(TOOLBAR_HEIGHT)
             .width(Length::Fill)
-            .style(shell_style::surface(tokens, SurfaceRole::Toolbar))
+            .style(shell_style::surface(
+                tokens,
+                if has_backdrop {
+                    SurfaceRole::BackdropToolbar
+                } else {
+                    SurfaceRole::Toolbar
+                },
+            ))
             .into()
     }
 

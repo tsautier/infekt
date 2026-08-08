@@ -3,7 +3,7 @@ use std::sync::Arc;
 use iced::Point;
 use iced::advanced::graphics::geometry::{Cache, Frame, Text};
 use iced::advanced::layout;
-use iced::advanced::renderer::{Quad, Style};
+use iced::advanced::renderer::Style;
 use iced::advanced::widget::tree::{self, Tree};
 use iced::advanced::{self, Clipboard, Layout, Shell, Widget};
 use iced::alignment;
@@ -12,7 +12,7 @@ use iced::{Color, Element, Event, Length, Rectangle, Renderer, Size, Vector};
 
 use crate::core::nfo_data::NfoData;
 use crate::core::nfo_renderer_grid::{NfoRendererBlockShape, NfoRendererGrid, NfoRendererLine};
-use crate::gui::utils::{to_iced_color, to_iced_color_rgb};
+use crate::gui::utils::to_iced_color;
 use crate::settings::NfoRenderSettings;
 
 pub struct EnhancedNfoView<'a> {
@@ -205,19 +205,6 @@ impl<Message, Theme> Widget<Message, Theme, Renderer> for EnhancedNfoView<'_> {
                             frame,
                         );
                     });
-
-            renderer.fill_quad(
-                Quad {
-                    bounds: Rectangle {
-                        x: viewport.x,
-                        y: viewport.y,
-                        width: viewport.width,
-                        height: viewport.height,
-                    },
-                    ..Quad::default()
-                },
-                to_iced_color_rgb(self.render_settings.background_color),
-            );
 
             let nfo_width_float = self.block_width_float * self.renderer_grid.unwrap().width as f32;
 

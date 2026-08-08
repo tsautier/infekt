@@ -100,4 +100,23 @@ No actionable P0, P1, or P2 visual differences remain within the agreed renderer
 - **Responsive and interaction evidence:** Enhanced, Classic, and Text Only retain the same backdrop; collapsing the inspector expands the crisp viewer without replacing the image; the 900-point capture preserves toolbar controls, artwork, scrolling area, and inspector. The About layer remains above the complete backdrop/shell stack.
 - **Required fidelity surfaces:** typography, spacing, toolbar grouping, theme colors, existing Tabler assets, metadata copy, and foreground NFO sharpness remain unchanged. No actionable P0, P1, or P2 shell/backdrop differences remain within the approved renderer boundary.
 
+## Inspector-Local Ambient Backdrop Follow-up
+
+- User-directed correction: keep the direct NFO canvas and toolbar free of ambient artwork while retaining an NFO-derived glass effect in the Presentation inspector.
+- Bright source visual truth: `/Users/ir/.codex/generated_images/019fdfff-8ce6-7281-8014-89a59d1a563e/exec-d7ba7619-1bca-4616-b0c7-be85fb0cf612.png` (1487 × 1058).
+- Dark source visual truth: `/Users/ir/.codex/generated_images/019fdfff-8ce6-7281-8014-89a59d1a563e/exec-c87aebb1-057a-46c0-9d6a-4674e932c9fb.png` (1486 × 1058).
+- Bright implementation: `/private/tmp/infekt-inspector-local-bright-final.png` (2880 × 1974 at 2× density; 1440 × 987 logical pixels, vertically limited by the available desktop work area).
+- Dark implementation: `/private/tmp/infekt-inspector-local-dark-final.png` (same dimensions and validation state, using Neon Pasture).
+- Full combined comparisons: `/private/tmp/infekt-inspector-local-bright-comparison.png` and `/private/tmp/infekt-inspector-local-dark-comparison.png`. Both source and implementation captures were normalized to 1440px wide, top-aligned, and cropped to the shared 987px comparison height.
+- Focused same-input comparisons: `/private/tmp/infekt-inspector-local-bright-focused.png` and `/private/tmp/infekt-inspector-local-dark-focused.png`, pairing the complete inspector regions at equal displayed width.
+- State: Enhanced mode, inspector open, the user-supplied `/Users/ir/Downloads/xrel-movie-3235328.nfo` loaded unchanged, Cobalt Paper and Neon Pasture themes.
+- **P2 — Ambient artwork competed with the foreground canvas.** Removed the root-level backdrop image and the translucent toolbar/canvas roles. The canvas and toolbar now use their normal opaque theme surfaces in every loaded state, so only the crisp renderer owns the viewer.
+- **P2 — A centered full-window image could expose an empty sliver behind the inspector.** The generated 640 × 400 raster now computes the horizontal center of mass of eligible post-preamble block and text ink. Block geometry, shade opacity, text-mark area, and theme alpha contribute to the focal weight; the crop remains clamped inside its 24px padded bounds.
+- **Inspector material:** one fixed image is aspect-filled with 1.10× overscan directly beneath the 320px inspector. It remains stationary while the inspector content scrolls. The overlay keeps the specified 0.64 dark and 0.82 bright scrims, with a neutral leading glass stop and a restrained theme tint at the far edge.
+- **Tiling decision:** horizontal repeat and mirror-repeat were evaluated but not used. The reference reads as one broad, non-periodic material wash; repeating recognizable NFO structure would introduce seams and wallpaper rhythm. The focal aspect-fill crop provides complete inspector coverage without those artifacts.
+- **Theme and visual fidelity:** Cobalt Paper retains a clean paper canvas and a subtle blue inspector wash; Neon Pasture retains a black canvas and a more visible cyan/teal glass atmosphere. Toolbar grouping, typography, controls, Tabler assets, metadata copy, and foreground NFO sharpness remain unchanged.
+- **Renderer boundary and lifecycle:** no core, decoding, ANSI, hyperlink, wrapping, Glow, export, foreground geometry, zoom, or scrolling behavior changed. The existing cache inputs and stale-result protection remain intact; only the backdrop algorithm version changed for the new focal crop.
+
+No actionable P0, P1, or P2 shell/backdrop differences remain for the corrected inspector-local direction.
+
 final result: passed

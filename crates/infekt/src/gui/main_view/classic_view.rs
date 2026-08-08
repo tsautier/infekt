@@ -1,5 +1,8 @@
 use super::{InfektMainView, Message};
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
 use iced::Element;
 use iced::Length::{Fill, Shrink};
 use iced::widget::scrollable::{Direction, Scrollbar};
@@ -27,8 +30,8 @@ impl InfektMainView {
                 } else {
                     self.classic_content(current_nfo)
                 })
-                .font(iced::Font::with_name("Cascadia Mono"))
-                .size(14.0)
+                .font(font_with_name(&self.active_render_settings.font_name))
+                .size(self.active_render_settings.classic_font_size)
                 .line_height(text::LineHeight::Relative(1.0))
                 .shaping(text::Shaping::Advanced)
                 .wrapping(text::Wrapping::None),
@@ -57,4 +60,21 @@ impl InfektMainView {
     fn stripped_content<'a>(&self, current_nfo: &'a NfoData) -> Text<'a> {
         text(current_nfo.get_stripped_text())
     }
+}
+
+fn font_with_name(name: &str) -> iced::Font {
+    static FONT_NAMES: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
+
+    // Iced stores font-family names for the lifetime of the application. Intern each
+    // selected system font once instead of leaking a new copy on every view rebuild.
+    let mut font_names = FONT_NAMES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let name = *font_names
+        .entry(name.to_owned())
+        .or_insert_with_key(|name| Box::leak(name.clone().into_boxed_str()));
+
+    iced::Font::with_name(name)
 }

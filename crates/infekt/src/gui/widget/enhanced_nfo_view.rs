@@ -35,7 +35,7 @@ impl<'a> EnhancedNfoView<'a> {
 
 #[derive(Default)]
 struct State {
-    nfo_id: u64,
+    cache_key: Option<(u64, u64)>,
     cache: Vec<Cache<Renderer>>,
 }
 
@@ -49,6 +49,10 @@ impl<Message, Theme> Widget<Message, Theme, Renderer> for EnhancedNfoView<'_> {
 
     fn state(&self) -> tree::State {
         tree::State::new(State::default())
+    }
+
+    fn diff(&self, tree: &mut Tree) {
+        self.sync_cache(tree.state.downcast_mut::<State>());
     }
 
     fn size(&self) -> Size<Length> {
@@ -90,14 +94,7 @@ impl<Message, Theme> Widget<Message, Theme, Renderer> for EnhancedNfoView<'_> {
     ) {
         let state = tree.state.downcast_mut::<State>();
 
-        if let Some(grid) = self.renderer_grid
-            && grid.id != state.nfo_id
-        {
-            state.nfo_id = grid.id;
-            state.cache.clear();
-            state
-                .cache
-                .resize_with(grid.height / CACHE_STRIDE_LINES + 1, Default::default);
+        if self.sync_cache(state) {
             shell.request_redraw();
         }
     }
@@ -237,6 +234,29 @@ impl<Message, Theme> Widget<Message, Theme, Renderer> for EnhancedNfoView<'_> {
         });
 
         renderer.end_layer();
+    }
+}
+
+impl EnhancedNfoView<'_> {
+    fn sync_cache(&self, state: &mut State) -> bool {
+        let cache_key = self
+            .renderer_grid
+            .map(|grid| (grid.id, self.render_settings.hash()));
+
+        if state.cache_key == cache_key {
+            return false;
+        }
+
+        state.cache_key = cache_key;
+        state.cache.clear();
+
+        if let Some(grid) = self.renderer_grid {
+            state
+                .cache
+                .resize_with(grid.height / CACHE_STRIDE_LINES + 1, Default::default);
+        }
+
+        true
     }
 }
 

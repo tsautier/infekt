@@ -1,5 +1,6 @@
 mod app;
 mod gui;
+mod presentation;
 mod settings;
 
 pub use infekt_core as core;
@@ -24,7 +25,7 @@ pub fn main() -> iced::Result {
             ..iced::Settings::default()
         })
         .scale_factor(|_| 1.0) // https://github.com/iced-rs/iced/issues/2657#issuecomment-2566536858
-        .window_size(iced::Size::new(850.0, 700.0))
+        .window_size(iced::Size::new(1200.0, 800.0))
         .centered()
         .title(InfektApp::title)
         .theme(InfektApp::theme)
@@ -34,7 +35,8 @@ pub fn main() -> iced::Result {
 fn initial_window_settings() -> window::Settings {
     window::Settings {
         icon: window_settings_application_icon(),
-        min_size: Some(iced::Size::new(600.0, 450.0)),
+        size: iced::Size::new(1200.0, 800.0),
+        min_size: Some(iced::Size::new(900.0, 600.0)),
         ..iced::window::Settings::default()
     }
 }

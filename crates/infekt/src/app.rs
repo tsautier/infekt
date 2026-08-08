@@ -3,57 +3,49 @@ mod theme;
 mod utils;
 mod view;
 
-use iced::{Task, Theme};
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use iced::{Task, Theme};
 
 use crate::core::nfo_data::NfoData;
 use crate::gui::about_screen::{self, InfektAboutScreen};
 use crate::gui::main_view::{self, InfektMainView};
-use crate::gui::preferences::{self, InfektPreferencesScreen};
-use crate::gui::sidebar::{self, InfektSidebar};
+use crate::gui::presentation_inspector::{self, PresentationInspector};
+use crate::presentation::PresentationState;
 use crate::settings::NfoRenderSettings;
 
 #[derive(Debug, Clone)]
-#[allow(clippy::enum_variant_names)]
 pub(crate) enum Message {
     NoOp,
     MainWindowCreated(Option<iced::window::Id>),
-    SidebarMessage(sidebar::Message),
-    MainViewMessage(main_view::Message),
-    PreferencesScreenMessage(preferences::Message),
-    AboutScreenMessage(about_screen::Message),
+    MainView(main_view::Message),
+    Inspector(presentation_inspector::Message),
+    About(about_screen::Message),
+    OpenFileDialog,
     OpenFile(Option<PathBuf>),
-    #[allow(dead_code)]
-    RenderSettingsChanged(Arc<NfoRenderSettings>),
+    ZoomIn,
+    ZoomOut,
+    ToggleInspector,
+    ToggleOverflow,
+    ShowAbout,
+    CloseAbout,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) enum Action {
     None,
-    ShowScreen(ActiveScreen),
     SelectFileForOpening,
     ShowErrorMessage(String),
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) enum ActiveScreen {
-    #[default]
-    MainView,
-    Preferences,
-    About,
 }
 
 #[derive(Default)]
 pub(crate) struct InfektApp {
     main_window_id: Option<iced::window::Id>,
-
-    active_screen: ActiveScreen,
-    sidebar: InfektSidebar,
     main_view: InfektMainView,
-    preferences_screen: InfektPreferencesScreen,
+    presentation_inspector: PresentationInspector,
     about_screen: InfektAboutScreen,
-
+    presentation: PresentationState,
     theme: Option<Theme>,
     active_render_settings: Arc<NfoRenderSettings>,
     current_nfo: NfoData,
@@ -61,12 +53,31 @@ pub(crate) struct InfektApp {
 
 impl InfektApp {
     pub fn new() -> (Self, Task<Message>) {
+        let presentation = PresentationState::new();
+        let mut settings = NfoRenderSettings::default();
+        presentation
+            .theme_values
+            .apply_to_render_settings(&mut settings);
+        presentation.apply_zoom(&mut settings);
+        let active_render_settings = Arc::new(settings);
+
+        let mut main_view = InfektMainView::default();
+        main_view.update(main_view::Message::RenderSettingsChanged(Arc::clone(
+            &active_render_settings,
+        )));
+
         let app = Self {
-            theme: Some(Theme::Dark),
+            main_view,
+            theme: Some(theme::create_theme(Arc::clone(&active_render_settings))),
+            active_render_settings,
+            presentation,
             ..Self::default()
         };
 
-        let task = Task::batch(vec![iced::window::oldest().map(Message::MainWindowCreated)]);
+        let task = Task::batch([
+            iced::window::oldest().map(Message::MainWindowCreated),
+            PresentationInspector::load_font_names().map(Message::Inspector),
+        ]);
 
         (app, task)
     }
@@ -78,79 +89,154 @@ impl InfektApp {
                 self.current_nfo.get_file_name().unwrap_or_default()
             )
         } else {
-            "iNFekt NFO Viewer".to_string()
+            "iNFekt NFO Viewer".to_owned()
         }
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
-        let mut task = Task::none();
-
         let action = match message {
             Message::NoOp => Action::None,
-
             Message::MainWindowCreated(window_id) => {
                 self.main_window_id = window_id;
-                self.theme = Some(theme::create_theme(self.active_render_settings.clone()));
+                Action::None
+            }
+            Message::MainView(message) => self.main_view.update(message),
+            Message::Inspector(message) => {
+                let mut settings = (*self.active_render_settings).clone();
+                let result = self.presentation_inspector.update(
+                    message,
+                    &mut self.presentation,
+                    &mut settings,
+                );
+
+                if result == presentation_inspector::Update::RenderSettingsChanged {
+                    self.apply_render_settings(settings);
+                }
 
                 Action::None
             }
-
-            Message::SidebarMessage(message) => self.sidebar.update(message),
-            Message::MainViewMessage(message) => self.main_view.update(message),
-            Message::PreferencesScreenMessage(message) => self.preferences_screen.update(message),
-            Message::AboutScreenMessage(message) => self.about_screen.update(message),
-
+            Message::About(message) => self.about_screen.update(message),
+            Message::OpenFileDialog => Action::SelectFileForOpening,
             Message::OpenFile(file) => self.action_load_new_nfo(file),
+            Message::ZoomIn => {
+                self.presentation.zoom_in();
+                self.apply_current_zoom();
+                Action::None
+            }
+            Message::ZoomOut => {
+                self.presentation.zoom_out();
+                self.apply_current_zoom();
+                Action::None
+            }
+            Message::ToggleInspector => {
+                self.presentation.inspector_open = !self.presentation.inspector_open;
+                self.presentation.overflow_open = false;
+                Action::None
+            }
+            Message::ToggleOverflow => {
+                self.presentation.overflow_open = !self.presentation.overflow_open;
+                Action::None
+            }
+            Message::ShowAbout => {
+                self.presentation.about_open = true;
+                self.presentation.overflow_open = false;
 
-            Message::RenderSettingsChanged(settings) => {
-                self.active_render_settings = settings;
-                self.theme = Some(theme::create_theme(self.active_render_settings.clone()));
+                if let Some(task) = self.about_screen.on_before_shown() {
+                    return task.map(Message::About);
+                }
 
-                // XXX: improve?
-                self.main_view
-                    .update(main_view::Message::RenderSettingsChanged(
-                        self.active_render_settings.clone(),
-                    ))
+                Action::None
+            }
+            Message::CloseAbout => {
+                self.presentation.about_open = false;
+                Action::None
             }
         };
 
         match action {
-            Action::None => {}
-            Action::ShowScreen(screen) => {
-                self.active_screen = screen;
-
-                match self.active_screen {
-                    ActiveScreen::MainView => {}
-                    ActiveScreen::Preferences => {
-                        let result = self
-                            .preferences_screen
-                            .on_before_shown(self.active_render_settings.clone());
-
-                        if let Some(new_task) = result {
-                            task = new_task.map(Message::PreferencesScreenMessage);
-                        }
-                    }
-                    ActiveScreen::About => {
-                        let result = self.about_screen.on_before_shown();
-
-                        if let Some(new_task) = result {
-                            task = new_task.map(Message::AboutScreenMessage);
-                        }
-                    }
-                }
-            }
-            Action::SelectFileForOpening => {
-                task = self.task_open_nfo_file_dialog();
-            }
-            Action::ShowErrorMessage(message) => {
-                task = self.show_error_message_popup(message);
-            }
+            Action::None => Task::none(),
+            Action::SelectFileForOpening => self.task_open_nfo_file_dialog(),
+            Action::ShowErrorMessage(message) => self.show_error_message_popup(message),
         }
-
-        task
     }
 
     pub fn theme(&self) -> Option<Theme> {
         self.theme.clone()
+    }
+
+    fn apply_current_zoom(&mut self) {
+        let mut settings = (*self.active_render_settings).clone();
+        self.presentation.apply_zoom(&mut settings);
+        self.apply_render_settings(settings);
+    }
+
+    fn apply_render_settings(&mut self, settings: NfoRenderSettings) {
+        self.active_render_settings = Arc::new(settings);
+        self.theme = Some(theme::create_theme(Arc::clone(
+            &self.active_render_settings,
+        )));
+        self.main_view
+            .update(main_view::Message::RenderSettingsChanged(Arc::clone(
+                &self.active_render_settings,
+            )));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gui::main_view::TabId;
+    use crate::gui::presentation_inspector;
+    use crate::presentation::NfoThemePreset;
+
+    #[test]
+    fn shell_controls_update_session_state() {
+        let (mut app, _startup) = InfektApp::new();
+
+        let _ = app.update(Message::ToggleInspector);
+        assert!(!app.presentation.inspector_open);
+
+        let _ = app.update(Message::ToggleOverflow);
+        assert!(app.presentation.overflow_open);
+
+        let _ = app.update(Message::ShowAbout);
+        assert!(app.presentation.about_open);
+        assert!(!app.presentation.overflow_open);
+        let _ = app.update(Message::CloseAbout);
+        assert!(!app.presentation.about_open);
+
+        let _ = app.update(Message::MainView(main_view::Message::TabSelected(
+            TabId::Classic,
+        )));
+        assert_eq!(app.main_view.active_tab(), TabId::Classic);
+
+        let _ = app.update(Message::ZoomIn);
+        assert_eq!(app.presentation.zoom_percent, 125);
+
+        let _ = app.update(Message::Inspector(
+            presentation_inspector::Message::ThemeSelected(NfoThemePreset::CobaltPaper),
+        ));
+        assert_eq!(app.presentation.selected_theme, NfoThemePreset::CobaltPaper);
+    }
+
+    #[test]
+    fn presentation_only_controls_do_not_change_render_settings() {
+        let (mut app, _startup) = InfektApp::new();
+        let settings_hash = app.active_render_settings.hash();
+
+        let _ = app.update(Message::Inspector(
+            presentation_inspector::Message::UseAnsiColorsChanged(false),
+        ));
+        let _ = app.update(Message::Inspector(
+            presentation_inspector::Message::LineWrappingChanged(true),
+        ));
+        let _ = app.update(Message::Inspector(
+            presentation_inspector::Message::AntialiasingChanged(false),
+        ));
+
+        assert_eq!(app.active_render_settings.hash(), settings_hash);
+        assert!(!app.presentation.use_ansi_colors);
+        assert!(app.presentation.line_wrapping);
+        assert!(!app.presentation.antialiasing);
     }
 }

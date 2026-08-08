@@ -1,12 +1,11 @@
 mod classic_view;
-mod file_info;
 
 use std::sync::Arc;
 
 use iced::Element;
 use iced::Length::Fill;
 use iced::widget::scrollable::{Direction, Scrollbar};
-use iced::widget::{self, button, column, row, scrollable, text};
+use iced::widget::{self, scrollable};
 
 use crate::app::Action;
 use crate::core::nfo_data::NfoData;
@@ -26,7 +25,6 @@ pub enum TabId {
     Enhanced,
     Classic,
     TextOnly,
-    FileInfo,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +34,10 @@ pub enum Message {
 }
 
 impl InfektMainView {
+    pub fn active_tab(&self) -> TabId {
+        self.active_tab
+    }
+
     pub fn update(&mut self, message: Message) -> Action {
         match message {
             Message::TabSelected(selected) => self.active_tab = selected,
@@ -46,32 +48,11 @@ impl InfektMainView {
     }
 
     pub fn view<'a>(&self, current_nfo: &'a NfoData) -> Element<'a, Message> {
-        let tab_button = |label: &'a str, tab_id: TabId| -> Element<'a, Message> {
-            let mut button = button(text(label).center()).width(Fill);
-
-            if current_nfo.is_loaded() {
-                button = button.on_press(Message::TabSelected(tab_id));
-            }
-
-            button.into()
-        };
-
-        column![
-            row![
-                tab_button("Enhanced", TabId::Enhanced),
-                tab_button("Classic", TabId::Classic),
-                tab_button("Text-Only", TabId::TextOnly),
-                tab_button("Properties", TabId::FileInfo),
-            ]
-            .spacing(1),
-            match self.active_tab {
-                TabId::Enhanced => self.enhanced_tab(current_nfo),
-                TabId::Classic => self.classic_tab(current_nfo, false),
-                TabId::TextOnly => self.classic_tab(current_nfo, true),
-                TabId::FileInfo => self.file_info_tab(current_nfo),
-            }
-        ]
-        .into()
+        match self.active_tab {
+            TabId::Enhanced => self.enhanced_tab(current_nfo),
+            TabId::Classic => self.classic_tab(current_nfo, false),
+            TabId::TextOnly => self.classic_tab(current_nfo, true),
+        }
     }
 
     fn enhanced_tab<'a>(&self, current_nfo: &'a NfoData) -> Element<'a, Message> {

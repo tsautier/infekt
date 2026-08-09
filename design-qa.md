@@ -137,4 +137,18 @@ No actionable P0, P1, or P2 shell/backdrop differences remain for the corrected 
 - **Renderer boundary:** no decoding, grid generation, ANSI, hyperlinks, wrapping, Glow, export, or foreground rendering semantics changed. Backdrop generation remains fixed-size, asynchronous, cache-keyed, and stale-result safe.
 - The final bright, dark, and Classic captures confirm equal side gutters, an opaque shrink-wrapped document surface, seamless continuation beneath the inspector to its bottom edge, and subtle backdrop transmission through the toolbar. No actionable P0, P1, or P2 differences remain for this corrected composition.
 
+## Critical NFO Blur Calibration Follow-up
+
+- User-provided validation file: `/Users/ir/Downloads/critical.nfo` (`79×162`, CP 437), the exact radiation-symbol artwork used by the approved design direction.
+- Bright source visual truth: `/Users/ir/.codex/generated_images/019fdfff-8ce6-7281-8014-89a59d1a563e/exec-d7ba7619-1bca-4616-b0c7-be85fb0cf612.png` (1487 × 1058).
+- Sigma-28 baseline: `/private/tmp/infekt-critical-blur-28-bright-wide.png` (2880 × 1974 at 2× density; 1440 × 987 logical pixels).
+- Final bright implementation: `/private/tmp/infekt-critical-blur-8-bright-final.png` (2880 × 1974, same viewport, input, theme, and state).
+- Final dark implementation: `/private/tmp/infekt-critical-blur-8-dark-final.png` (2880 × 1974, same viewport and input using Neon Pasture).
+- Source/final combined evidence: `/private/tmp/infekt-critical-blur-8-bright-comparison.png` (2586 × 944). Both screenshots were proportionally normalized to 900px content height, top-aligned, and placed side by side with labeled headers.
+- Matched before/after evidence: `/private/tmp/infekt-critical-blur-16-vs-8-full.png` (1313 × 1896), using identical 900px-high normalized native captures and an 8px separator. The amplified pixel difference is `/private/tmp/infekt-critical-blur-16-vs-8-diff-x4.png`.
+- **P2 — Ambient radiation silhouette was over-smoothed.** Following the user's final sharpness choice, reduced the fixed-raster Gaussian blur sigma from the original 28 to 8. The revised field retains recognizable radiation-derived structure through the exposed gutters, toolbar, and inspector without exposing readable duplicate text or a center mirror seam.
+- **Cache correctness:** incremented the backdrop algorithm version from 5 to 8 across the calibration iterations so the final pixel treatment invalidates any in-flight or cached result using an earlier blur calibration.
+- **Required fidelity surfaces:** backdrop composition, mirror-repeat coverage, scrim opacities, opaque NFO paper, toolbar and inspector materials, typography, spacing, copy, Tabler assets, foreground geometry, and renderer behavior are unchanged. Bright Cobalt Paper remains restrained; dark Neon Pasture keeps stronger depth while the controls and crisp NFO remain dominant.
+- No actionable P0, P1, or P2 differences remain for the blur-calibration request.
+
 final result: passed

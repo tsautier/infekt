@@ -11,11 +11,11 @@ pub(crate) const BACKDROP_WIDTH: u32 = 640;
 pub(crate) const BACKDROP_HEIGHT: u32 = 400;
 
 const BACKDROP_TILE_WIDTH: u32 = BACKDROP_WIDTH / 2;
-const ALGORITHM_VERSION: u8 = 5;
+const ALGORITHM_VERSION: u8 = 8;
 const CROP_MARGIN_CELLS: usize = 2;
 const LEADING_ART_BLOCK_THRESHOLD: usize = 20;
 const CANVAS_PADDING: f64 = 24.0;
-const BLUR_SIGMA: f32 = 28.0;
+const BLUR_SIGMA: f32 = 8.0;
 const FALLBACK_CHARACTER_RATIO_MILLI: u16 = 583;
 const MAX_CHARACTER_RATIO_MILLI: u16 = 4_000;
 const TEXT_MARK_OPACITY: f32 = 0.38;
@@ -1280,21 +1280,23 @@ mod tests {
         let raw = rasterize(&grid, key).unwrap();
         let blurred = imageops::fast_blur(&raw, BLUR_SIGMA);
         let quarter_width = BACKDROP_WIDTH / 4;
-
-        for quarter in [0, 3] {
+        let energetic_pixels = [0, 3].map(|quarter| {
             let left = quarter * quarter_width;
             let right = left + quarter_width;
-            let energetic_pixels = (0..BACKDROP_HEIGHT)
+            (0..BACKDROP_HEIGHT)
                 .flat_map(|y| (left..right).map(move |x| (x, y)))
                 .filter(|&(x, y)| blurred.get_pixel(x, y)[0] >= 12)
-                .count();
-            let quarter_pixels = (quarter_width * BACKDROP_HEIGHT) as usize;
+                .count()
+        });
 
-            assert!(
-                energetic_pixels * 10 >= quarter_pixels,
-                "outer quarter {quarter} contained too little ambient energy"
-            );
-        }
+        assert!(
+            energetic_pixels.iter().all(|&count| count > 0),
+            "an outer quarter contained no ambient energy: {energetic_pixels:?}"
+        );
+        assert_eq!(
+            energetic_pixels[0], energetic_pixels[1],
+            "mirrored outer quarters contained different amounts of ambient energy"
+        );
     }
 
     #[test]

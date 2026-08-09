@@ -13,8 +13,8 @@ The Rust workspace is the default entrypoint:
 cargo build --workspace
 cargo run -p infekt
 cargo run -p infekt-cli -- --help
-dist plan --tag=v2.0.0-alpha.4
-dist build --tag=v2.0.0-alpha.4
+dist plan --tag=v2.0.0-alpha.5
+dist build --tag=v2.0.0-alpha.5
 ```
 
 Release tags build Apple Silicon macOS, ARM64 and x86-64 Linux, and

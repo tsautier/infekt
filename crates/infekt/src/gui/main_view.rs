@@ -7,7 +7,6 @@ use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::{self, scrollable};
 use iced::{Color, Element};
 
-use crate::app::Action;
 use crate::core::nfo_data::NfoData;
 use crate::settings::NfoRenderSettings;
 
@@ -39,13 +38,11 @@ impl InfektMainView {
         self.active_tab
     }
 
-    pub fn update(&mut self, message: Message) -> Action {
+    pub fn update(&mut self, message: Message) {
         match message {
             Message::TabSelected(selected) => self.active_tab = selected,
             Message::RenderSettingsChanged(settings) => self.active_render_settings = settings,
         }
-
-        Action::None
     }
 
     pub fn view<'a>(&self, current_nfo: &'a NfoData) -> Element<'a, Message> {

@@ -34,13 +34,6 @@ pub(crate) enum Message {
     BackdropReady(BackdropKey, u64, Option<BackdropImage>),
 }
 
-#[derive(Debug, Clone)]
-pub(crate) enum Action {
-    None,
-    SelectFileForOpening,
-    ShowErrorMessage(String),
-}
-
 #[derive(Default)]
 pub(crate) struct InfektApp {
     main_window_id: Option<iced::window::Id>,
@@ -99,13 +92,16 @@ impl InfektApp {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         let mut follow_up = Task::none();
 
-        let action = match message {
-            Message::NoOp => Action::None,
+        let task = match message {
+            Message::NoOp => Task::none(),
             Message::MainWindowCreated(window_id) => {
                 self.main_window_id = window_id;
-                Action::None
+                Task::none()
             }
-            Message::MainView(message) => self.main_view.update(message),
+            Message::MainView(message) => {
+                self.main_view.update(message);
+                Task::none()
+            }
             Message::Inspector(message) => {
                 let mut settings = (*self.active_render_settings).clone();
                 let result = self.presentation_inspector.update(
@@ -119,10 +115,13 @@ impl InfektApp {
                     follow_up = self.ensure_backdrop();
                 }
 
-                Action::None
+                Task::none()
             }
-            Message::About(message) => self.about_screen.update(message),
-            Message::OpenFileDialog => Action::SelectFileForOpening,
+            Message::About(message) => {
+                self.about_screen.update(message);
+                Task::none()
+            }
+            Message::OpenFileDialog => self.task_open_nfo_file_dialog(),
             Message::OpenFile(file) => {
                 let should_refresh_backdrop = file.is_some();
 
@@ -130,62 +129,59 @@ impl InfektApp {
                     self.backdrop.invalidate_source();
                 }
 
-                let action = self.action_load_new_nfo(file);
+                let task = match self.load_new_nfo(file) {
+                    Ok(()) => Task::none(),
+                    Err(message) => self.show_error_message_popup(message),
+                };
 
                 if should_refresh_backdrop {
                     follow_up = self.ensure_backdrop();
                 }
 
-                action
+                task
             }
             Message::ZoomIn => {
                 self.presentation.zoom_in();
                 self.apply_current_zoom();
                 follow_up = self.ensure_backdrop();
-                Action::None
+                Task::none()
             }
             Message::ZoomOut => {
                 self.presentation.zoom_out();
                 self.apply_current_zoom();
                 follow_up = self.ensure_backdrop();
-                Action::None
+                Task::none()
             }
             Message::ToggleInspector => {
                 self.presentation.inspector_open = !self.presentation.inspector_open;
                 self.presentation.overflow_open = false;
-                Action::None
+                Task::none()
             }
             Message::ToggleOverflow => {
                 self.presentation.overflow_open = !self.presentation.overflow_open;
-                Action::None
+                Task::none()
             }
             Message::ShowAbout => {
                 self.presentation.about_open = true;
                 self.presentation.overflow_open = false;
 
                 if let Some(task) = self.about_screen.on_before_shown() {
-                    return task.map(Message::About);
+                    task.map(Message::About)
+                } else {
+                    Task::none()
                 }
-
-                Action::None
             }
             Message::CloseAbout => {
                 self.presentation.about_open = false;
-                Action::None
+                Task::none()
             }
             Message::BackdropReady(key, generation, image) => {
                 self.backdrop.accept_result(key, generation, image);
-                Action::None
+                Task::none()
             }
         };
 
-        let action_task = match action {
-            Action::None => Task::none(),
-            Action::SelectFileForOpening => self.task_open_nfo_file_dialog(),
-            Action::ShowErrorMessage(message) => self.show_error_message_popup(message),
-        };
-
-        Task::batch([action_task, follow_up])
+        Task::batch([task, follow_up])
     }
 
     pub fn theme(&self) -> Option<Theme> {

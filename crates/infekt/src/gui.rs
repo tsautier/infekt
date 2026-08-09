@@ -1,6 +1,5 @@
 pub mod about_screen;
 pub mod main_view;
-#[path = "gui/preferences/named_colors.rs"]
 pub(crate) mod named_colors;
 pub(crate) mod nfo_backdrop;
 pub(crate) mod presentation_inspector;

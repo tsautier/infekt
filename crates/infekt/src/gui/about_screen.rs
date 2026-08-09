@@ -4,8 +4,6 @@ use iced::widget::{
 };
 use iced::{Element, Task, system};
 
-use crate::app::Action;
-
 #[derive(Default)]
 pub struct InfektAboutScreen {
     sysinfo: Option<system::Information>,
@@ -25,7 +23,7 @@ pub enum LinkTarget {
 const LOGO_256: &[u8] = include_bytes!("../../../../assets/icons/iNFekt_6_256x256x32.png");
 
 impl InfektAboutScreen {
-    pub fn update(&mut self, message: Message) -> Action {
+    pub fn update(&mut self, message: Message) {
         match message {
             Message::FetchInformation(sysinfo) => {
                 self.sysinfo = Some(*sysinfo);
@@ -34,8 +32,6 @@ impl InfektAboutScreen {
                 open::that_detached("https://infekt.ws").unwrap();
             }
         }
-
-        Action::None
     }
 
     pub fn on_before_shown(&mut self) -> Option<Task<Message>> {

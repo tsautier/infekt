@@ -2,9 +2,10 @@ use iced::advanced::layout;
 use iced::advanced::renderer::{self, Style};
 use iced::advanced::widget::{Operation, Tree};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, mouse, overlay};
-use iced::{Color, Element, Event, Length, Point, Rectangle, Size, Vector};
+use iced::{Color, Element, Event, Length, Point, Rectangle, Shadow, Size, Vector};
 
 const PAPER_PADDING: f32 = 24.0;
+const PAPER_FADE_RADIUS: f32 = 24.0;
 
 /// Draws an opaque paper around intrinsic NFO content.
 ///
@@ -142,17 +143,23 @@ where
         let translation = paper_translation(bounds, *viewport);
         let presented_bounds = bounds + translation;
 
-        if !presented_bounds.intersects(viewport) {
+        if !presented_bounds
+            .expand(PAPER_FADE_RADIUS)
+            .intersects(viewport)
+        {
             return;
         }
 
-        renderer.fill_quad(
-            renderer::Quad {
-                bounds: presented_bounds,
-                ..renderer::Quad::default()
-            },
-            self.background,
-        );
+        renderer.with_layer(*viewport, |renderer| {
+            renderer.fill_quad(
+                renderer::Quad {
+                    bounds: presented_bounds,
+                    shadow: paper_fade(self.background),
+                    ..renderer::Quad::default()
+                },
+                self.background,
+            );
+        });
 
         renderer.with_translation(translation, |renderer| {
             self.content.as_widget().draw(
@@ -214,11 +221,22 @@ fn horizontal_offset(paper_width: f32, viewport_width: f32) -> f32 {
     ((viewport_width - paper_width) * 0.5).max(0.0)
 }
 
+fn paper_fade(background: Color) -> Shadow {
+    Shadow {
+        color: background,
+        blur_radius: PAPER_FADE_RADIUS,
+        ..Shadow::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use iced::{Rectangle, Size};
+    use iced::{Color, Rectangle, Shadow, Size, Vector};
 
-    use super::{PAPER_PADDING, horizontal_offset, paper_size, paper_translation};
+    use super::{
+        PAPER_FADE_RADIUS, PAPER_PADDING, horizontal_offset, paper_fade, paper_size,
+        paper_translation,
+    };
 
     #[test]
     fn paper_size_adds_equal_padding_to_every_edge() {
@@ -242,5 +260,21 @@ mod tests {
     fn wide_paper_keeps_its_scroll_origin() {
         assert_eq!(horizontal_offset(1200.0, 900.0), 0.0);
         assert_eq!(horizontal_offset(900.0, 900.0), 0.0);
+    }
+
+    #[test]
+    fn paper_fade_is_theme_colored_and_does_not_change_layout() {
+        let background = Color::from_rgb(0.125, 0.25, 0.75);
+
+        assert_eq!(PAPER_FADE_RADIUS, PAPER_PADDING);
+        assert_eq!(
+            paper_fade(background),
+            Shadow {
+                color: background,
+                offset: Vector::ZERO,
+                blur_radius: 24.0,
+            }
+        );
+        assert_eq!(paper_size(Size::new(560.0, 400.0)), Size::new(608.0, 448.0));
     }
 }

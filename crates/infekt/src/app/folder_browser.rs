@@ -167,7 +167,7 @@ impl FolderBrowser {
                 let index = match direction {
                     BrowseDirection::Previous => current
                         .checked_sub(offset)
-                        .unwrap_or(self.files.len() - (offset - current)),
+                        .unwrap_or_else(|| self.files.len() - (offset - current)),
                     BrowseDirection::Next => (current + offset) % self.files.len(),
                 };
 
@@ -516,6 +516,34 @@ mod tests {
                 directory.join("release1.nfo"),
                 directory.join("release4.nfo"),
                 directory.join("release3.nfo"),
+            ]
+        );
+    }
+
+    #[test]
+    fn browsing_previous_from_later_index_does_not_underflow() {
+        let directory = Path::new("/tmp/releases");
+        let current = directory.join("release3.nfo");
+        let mut browser = FolderBrowser::default();
+        browser.begin_for_file(&current);
+        let initial = scan_result(
+            &browser,
+            directory,
+            &[
+                "release1.nfo",
+                "release2.nfo",
+                "release3.nfo",
+                "release4.nfo",
+            ],
+        );
+        browser.apply_scan(initial, Some(&current));
+
+        assert_eq!(
+            browser.paths_in_direction(BrowseDirection::Previous),
+            vec![
+                directory.join("release2.nfo"),
+                directory.join("release1.nfo"),
+                directory.join("release4.nfo"),
             ]
         );
     }

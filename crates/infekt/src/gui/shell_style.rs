@@ -252,12 +252,12 @@ fn surface_appearance(tokens: ShellTokens, role: SurfaceRole) -> container::Styl
             )
         }
         SurfaceRole::Glass => (
-            tokens.glass.into(),
+            overlay_glass(tokens).into(),
             tokens.panel_border(tokens.border),
             tokens.shadow,
         ),
         SurfaceRole::NavigatorGlass => (
-            tokens.glass.into(),
+            overlay_glass(tokens).into(),
             tokens.panel_border(tokens.border),
             Shadow {
                 offset: Vector::new(0.0, 10.0),
@@ -645,6 +645,24 @@ fn layer(color: Color, alpha: f32) -> Color {
     Color { a: alpha, ..color }
 }
 
+fn halve_transparency(color: Color) -> Color {
+    Color {
+        a: 1.0 - (1.0 - color.a) / 2.0,
+        ..color
+    }
+}
+
+fn overlay_glass(tokens: ShellTokens) -> Color {
+    if tokens.is_dark {
+        layer(
+            composite(tokens.glass, tokens.root),
+            halve_transparency(tokens.glass).a,
+        )
+    } else {
+        halve_transparency(tokens.glass)
+    }
+}
+
 fn fade(color: Color, opacity: f32) -> Color {
     Color {
         a: color.a * opacity,
@@ -761,7 +779,7 @@ mod tests {
     }
 
     #[test]
-    fn navigator_uses_the_overflow_menu_glass_background() {
+    fn navigator_and_overflow_menu_use_half_transparency_glass() {
         let dark = ShellTokens::from_settings(&NfoRenderSettings {
             background_color: Rgb::new(0.01, 0.02, 0.02),
             ..NfoRenderSettings::default()
@@ -775,6 +793,12 @@ mod tests {
             assert_eq!(navigator.background, overflow.background);
             assert_eq!(navigator.border, overflow.border);
             assert_eq!(navigator.shadow.blur_radius, 30.0);
+
+            let Some(Background::Color(background)) = navigator.background else {
+                panic!("navigator glass must use a solid background");
+            };
+            assert_eq!(background, overlay_glass(tokens));
+            assert_eq!(background.a, 1.0 - (1.0 - tokens.glass.a) / 2.0);
         }
     }
 

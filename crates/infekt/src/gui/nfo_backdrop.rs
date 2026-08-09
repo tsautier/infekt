@@ -11,10 +11,11 @@ pub(crate) const BACKDROP_WIDTH: u32 = 640;
 pub(crate) const BACKDROP_HEIGHT: u32 = 400;
 
 const BACKDROP_TILE_WIDTH: u32 = BACKDROP_WIDTH / 2;
-const ALGORITHM_VERSION: u8 = 8;
+const ALGORITHM_VERSION: u8 = 10;
 const CROP_MARGIN_CELLS: usize = 2;
 const LEADING_ART_BLOCK_THRESHOLD: usize = 20;
 const CANVAS_PADDING: f64 = 24.0;
+const ARTWORK_SCALE: f64 = 0.75;
 const BLUR_SIGMA: f32 = 8.0;
 const FALLBACK_CHARACTER_RATIO_MILLI: u16 = 583;
 const MAX_CHARACTER_RATIO_MILLI: u16 = 4_000;
@@ -182,6 +183,7 @@ struct ContentBounds {
     right: usize,
     bottom: usize,
     content_top: usize,
+    has_dense_anchor: bool,
 }
 
 impl ContentBounds {
@@ -236,7 +238,8 @@ impl RasterTransform {
 
         let character_ratio = f64::from(character_ratio_milli) / 1_000.0;
         let cell_height = (available_width / (crop_width as f64 * character_ratio))
-            .max(available_height / crop_height as f64);
+            .max(available_height / crop_height as f64)
+            * ARTWORK_SCALE;
 
         if !cell_height.is_finite() || cell_height <= 0.0 {
             return None;
@@ -248,7 +251,12 @@ impl RasterTransform {
         let focal_offset_x = (horizontal_focal - bounds.left as f64) * cell_width;
         let focal_offset_y = (vertical_focal - bounds.top as f64) * cell_height;
         let origin_x = cover_origin(f64::from(canvas_width), rendered_width, focal_offset_x);
-        let origin_y = cover_origin(f64::from(canvas_height), rendered_height, focal_offset_y);
+        let origin_y = if bounds.has_dense_anchor {
+            let anchor_offset_y = (bounds.content_top - bounds.top) as f64 * cell_height;
+            cover_origin_for_anchor(f64::from(canvas_height), rendered_height, anchor_offset_y)
+        } else {
+            cover_origin(f64::from(canvas_height), rendered_height, focal_offset_y)
+        };
 
         Some(Self {
             bounds,
@@ -275,11 +283,24 @@ impl RasterTransform {
 }
 
 fn cover_origin(canvas_extent: f64, rendered_extent: f64, focal_offset: f64) -> f64 {
-    let available_extent = canvas_extent - CANVAS_PADDING * 2.0;
-    let minimum_origin = (CANVAS_PADDING + available_extent - rendered_extent).min(CANVAS_PADDING);
-    let maximum_origin = CANVAS_PADDING;
+    let (minimum_origin, maximum_origin) = cover_origin_range(canvas_extent, rendered_extent);
 
     (canvas_extent * 0.5 - focal_offset).clamp(minimum_origin, maximum_origin)
+}
+
+fn cover_origin_for_anchor(canvas_extent: f64, rendered_extent: f64, anchor_offset: f64) -> f64 {
+    let (minimum_origin, maximum_origin) = cover_origin_range(canvas_extent, rendered_extent);
+
+    (CANVAS_PADDING - anchor_offset).clamp(minimum_origin, maximum_origin)
+}
+
+fn cover_origin_range(canvas_extent: f64, rendered_extent: f64) -> (f64, f64) {
+    let available_extent = canvas_extent - CANVAS_PADDING * 2.0;
+    let opposite_origin = CANVAS_PADDING + available_extent - rendered_extent;
+    let minimum_origin = opposite_origin.min(CANVAS_PADDING);
+    let maximum_origin = opposite_origin.max(CANVAS_PADDING);
+
+    (minimum_origin, maximum_origin)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -325,7 +346,7 @@ fn rasterize(grid: &NfoRendererGrid, key: BackdropKey) -> Option<RgbaImage> {
 
     paint_grid(&mut tile, grid, bounds, transform, key);
 
-    // Mirror one cover-rendered tile instead of stretching the NFO.
+    // Mirror one zoomed-out tile instead of stretching the NFO.
     // The matching center-edge pixels let the later full-image blur erase the
     // change in direction without introducing a value seam.
     let mirrored_tile = imageops::flip_horizontal(&tile);
@@ -492,7 +513,8 @@ fn visible_bounds(grid: &NfoRendererGrid) -> Option<ContentBounds> {
     let mut maximum_col = 0;
     let mut maximum_row = 0;
     let mut has_content = false;
-    let content_top = first_dense_block_row(grid).unwrap_or(0);
+    let dense_anchor = first_dense_block_row(grid);
+    let content_top = dense_anchor.map_or(0, |row| connected_leading_block_row(grid, row));
 
     let mut include = |col: usize, row: usize| {
         if col >= grid.width || row >= grid.height {
@@ -548,6 +570,7 @@ fn visible_bounds(grid: &NfoRendererGrid) -> Option<ContentBounds> {
             .saturating_add(CROP_MARGIN_CELLS + 1)
             .min(grid.height),
         content_top,
+        has_dense_anchor: dense_anchor.is_some(),
     })
 }
 
@@ -582,6 +605,75 @@ fn first_dense_block_row(grid: &NfoRendererGrid) -> Option<usize> {
             None
         })
         .min()
+}
+
+fn connected_leading_block_row(grid: &NfoRendererGrid, dense_anchor: usize) -> usize {
+    let mut content_top = dense_anchor;
+    let mut following_columns = visible_block_columns(grid, dense_anchor);
+    if following_columns.is_empty() {
+        return dense_anchor;
+    }
+
+    while content_top > 0 {
+        let preceding_row = content_top - 1;
+        let preceding_columns = visible_block_columns(grid, preceding_row);
+        if preceding_columns.is_empty() {
+            break;
+        }
+
+        if !block_rows_connect(&preceding_columns, &following_columns) {
+            break;
+        }
+
+        content_top = preceding_row;
+        following_columns = preceding_columns;
+    }
+
+    content_top
+}
+
+fn visible_block_columns(grid: &NfoRendererGrid, row: usize) -> Vec<usize> {
+    let mut columns = Vec::new();
+
+    for line in grid.lines.iter().filter(|line| line.row == row) {
+        for group in &line.block_groups {
+            for (offset, shape) in group.blocks.iter().enumerate() {
+                let Some(col) = group.col.checked_add(offset) else {
+                    break;
+                };
+
+                if col < grid.width && is_visible_block(shape) {
+                    columns.push(col);
+                }
+            }
+        }
+    }
+
+    columns.sort_unstable();
+    columns.dedup();
+    columns
+}
+
+fn block_rows_connect(preceding: &[usize], following: &[usize]) -> bool {
+    let mut preceding_index = 0;
+    let mut following_index = 0;
+
+    while preceding_index < preceding.len() && following_index < following.len() {
+        let preceding_col = preceding[preceding_index];
+        let following_col = following[following_index];
+
+        if preceding_col.abs_diff(following_col) <= 1 {
+            return true;
+        }
+
+        if preceding_col < following_col {
+            preceding_index += 1;
+        } else {
+            following_index += 1;
+        }
+    }
+
+    false
 }
 
 fn is_visible_block(shape: &NfoRendererBlockShape) -> bool {
@@ -750,21 +842,32 @@ mod tests {
         }
     }
 
-    fn assert_cover(transform: RasterTransform, canvas_width: u32, canvas_height: u32) {
+    fn assert_art_fits_or_covers(
+        transform: RasterTransform,
+        canvas_width: u32,
+        canvas_height: u32,
+    ) {
         let epsilon = 1.0e-7;
         let rendered_width = transform.cell_width * transform.bounds.width() as f64;
         let rendered_height = transform.cell_height * transform.bounds.height() as f64;
 
-        assert!(transform.origin_x <= CANVAS_PADDING + epsilon);
-        assert!(
-            transform.origin_x + rendered_width
-                >= f64::from(canvas_width) - CANVAS_PADDING - epsilon
-        );
-        assert!(transform.origin_y <= CANVAS_PADDING + epsilon);
-        assert!(
-            transform.origin_y + rendered_height
-                >= f64::from(canvas_height) - CANVAS_PADDING - epsilon
-        );
+        for (origin, rendered_extent, canvas_extent) in [
+            (transform.origin_x, rendered_width, f64::from(canvas_width)),
+            (
+                transform.origin_y,
+                rendered_height,
+                f64::from(canvas_height),
+            ),
+        ] {
+            let available_extent = canvas_extent - CANVAS_PADDING * 2.0;
+            if rendered_extent >= available_extent {
+                assert!(origin <= CANVAS_PADDING + epsilon);
+                assert!(origin + rendered_extent >= canvas_extent - CANVAS_PADDING - epsilon);
+            } else {
+                assert!(origin >= CANVAS_PADDING - epsilon);
+                assert!(origin + rendered_extent <= canvas_extent - CANVAS_PADDING + epsilon);
+            }
+        }
     }
 
     #[test]
@@ -823,6 +926,7 @@ mod tests {
                 right: 33,
                 bottom: 13,
                 content_top: 0,
+                has_dense_anchor: false,
             })
         );
     }
@@ -872,11 +976,63 @@ mod tests {
                 right: 73,
                 bottom: 18,
                 content_top: 10,
+                has_dense_anchor: true,
             }
         );
         assert!(!bounds.contains(35, 8));
         assert!(bounds.contains(30, 10));
         assert!(bounds.contains(70, 15));
+    }
+
+    #[test]
+    fn connected_sparse_ramp_is_retained_before_the_dense_anchor() {
+        let mut top = line(1);
+        top.block_groups.push(NfoRendererBlockGroup {
+            col: 9,
+            blocks: vec![NfoRendererBlockShape::FullBlock; 6],
+        });
+
+        let mut middle = line(2);
+        middle.block_groups.push(NfoRendererBlockGroup {
+            col: 5,
+            blocks: vec![NfoRendererBlockShape::FullBlock; 14],
+        });
+
+        let mut anchor = line(3);
+        anchor.block_groups.push(NfoRendererBlockGroup {
+            col: 4,
+            blocks: vec![NfoRendererBlockShape::FullBlock; 32],
+        });
+
+        let mut trailing_text = line(65);
+        trailing_text.text_flights.push(NfoRendererTextFlight {
+            col: 78,
+            text: "A".into(),
+        });
+
+        let grid = grid_with_lines(79, 66, 21, vec![top, middle, anchor, trailing_text]);
+        let bounds = visible_bounds(&grid).unwrap();
+        let key = BackdropKey::new(&grid, &NfoRenderSettings::default(), 0.583);
+        let (focal_x, focal_y) = ink_focal(&grid, bounds, key);
+        let transform = RasterTransform::new(
+            bounds,
+            key.character_ratio_milli,
+            focal_x,
+            focal_y,
+            BACKDROP_TILE_WIDTH,
+            BACKDROP_HEIGHT,
+        )
+        .unwrap();
+        let content_top_pixel =
+            transform.origin_y + (bounds.content_top - bounds.top) as f64 * transform.cell_height;
+
+        assert_eq!(first_dense_block_row(&grid), Some(3));
+        assert_eq!(bounds.content_top, 1);
+        assert!(bounds.has_dense_anchor);
+        assert!(bounds.contains(9, 1));
+        assert!(content_top_pixel >= CANVAS_PADDING);
+        assert!(content_top_pixel <= f64::from(BACKDROP_HEIGHT) - CANVAS_PADDING);
+        assert_art_fits_or_covers(transform, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
     }
 
     #[test]
@@ -891,6 +1047,7 @@ mod tests {
 
         assert_eq!(first_dense_block_row(&sparse_grid), None);
         assert_eq!(sparse_bounds.content_top, 0);
+        assert!(!sparse_bounds.has_dense_anchor);
         assert!(sparse_bounds.contains(12, 7));
 
         let mut text = line(4);
@@ -903,6 +1060,7 @@ mod tests {
 
         assert_eq!(first_dense_block_row(&text_grid), None);
         assert_eq!(text_bounds.content_top, 0);
+        assert!(!text_bounds.has_dense_anchor);
         assert!(text_bounds.contains(6, 4));
     }
 
@@ -993,7 +1151,72 @@ mod tests {
         assert_eq!(focal_y, 10.5);
         assert!((focal_pixel_x - f64::from(BACKDROP_TILE_WIDTH) * 0.5).abs() < 1.0e-9);
         assert!(transform.origin_x < CANVAS_PADDING);
-        assert_cover(transform, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
+        assert_art_fits_or_covers(transform, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
+    }
+
+    #[test]
+    fn dense_start_stays_visible_when_later_art_dominates_the_vertical_focal() {
+        let mut anchor = line(10);
+        anchor.block_groups.push(NfoRendererBlockGroup {
+            col: 40,
+            blocks: vec![NfoRendererBlockShape::FullBlock; 20],
+        });
+
+        let mut later = line(100);
+        later.block_groups.push(NfoRendererBlockGroup {
+            col: 0,
+            blocks: vec![NfoRendererBlockShape::FullBlock; 100],
+        });
+
+        let grid = grid_with_lines(100, 120, 20, vec![anchor, later]);
+        let settings = NfoRenderSettings::default();
+        let key = BackdropKey::new(&grid, &settings, 0.583);
+        let bounds = visible_bounds(&grid).unwrap();
+        let (focal_x, focal_y) = ink_focal(&grid, bounds, key);
+        let transform = RasterTransform::new(
+            bounds,
+            key.character_ratio_milli,
+            focal_x,
+            focal_y,
+            BACKDROP_TILE_WIDTH,
+            BACKDROP_HEIGHT,
+        )
+        .unwrap();
+        let anchor_pixel_y =
+            transform.origin_y + (bounds.content_top - bounds.top) as f64 * transform.cell_height;
+
+        assert_eq!(bounds.content_top, 10);
+        assert!(focal_y > 80.0);
+        assert!(anchor_pixel_y >= CANVAS_PADDING);
+        assert!(anchor_pixel_y <= f64::from(BACKDROP_HEIGHT) - CANVAS_PADDING);
+        assert_art_fits_or_covers(transform, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
+    }
+
+    #[test]
+    fn artwork_is_scaled_to_three_quarters_of_cover() {
+        let bounds = ContentBounds {
+            left: 0,
+            top: 0,
+            right: 80,
+            bottom: 40,
+            content_top: 0,
+            has_dense_anchor: false,
+        };
+        let transform = RasterTransform::new(
+            bounds,
+            583,
+            40.0,
+            20.0,
+            BACKDROP_TILE_WIDTH,
+            BACKDROP_HEIGHT,
+        )
+        .unwrap();
+        let available_width = f64::from(BACKDROP_TILE_WIDTH) - CANVAS_PADDING * 2.0;
+        let available_height = f64::from(BACKDROP_HEIGHT) - CANVAS_PADDING * 2.0;
+        let cover_cell_height = (available_width / (80.0 * 0.583)).max(available_height / 40.0);
+
+        assert!((transform.cell_height - cover_cell_height * 0.75).abs() < 1.0e-9);
+        assert_art_fits_or_covers(transform, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
     }
 
     #[test]
@@ -1057,6 +1280,7 @@ mod tests {
             right: 100,
             bottom: 4,
             content_top: 0,
+            has_dense_anchor: false,
         };
         let wide_left =
             RasterTransform::new(wide, 583, 0.5, 2.0, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT)
@@ -1073,8 +1297,8 @@ mod tests {
                 .abs()
                 < 1.0e-7
         );
-        assert_cover(wide_left, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
-        assert_cover(wide_right, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
+        assert_art_fits_or_covers(wide_left, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
+        assert_art_fits_or_covers(wide_right, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
 
         let tall = ContentBounds {
             left: 0,
@@ -1082,6 +1306,7 @@ mod tests {
             right: 4,
             bottom: 100,
             content_top: 0,
+            has_dense_anchor: false,
         };
         let tall_top =
             RasterTransform::new(tall, 583, 2.0, 0.5, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT)
@@ -1098,8 +1323,8 @@ mod tests {
                 .abs()
                 < 1.0e-7
         );
-        assert_cover(tall_top, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
-        assert_cover(tall_bottom, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
+        assert_art_fits_or_covers(tall_top, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
+        assert_art_fits_or_covers(tall_bottom, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
     }
 
     #[test]
@@ -1110,6 +1335,7 @@ mod tests {
             right: 3,
             bottom: 10_000,
             content_top: 0,
+            has_dense_anchor: false,
         };
         let wide = ContentBounds {
             left: 0,
@@ -1117,6 +1343,7 @@ mod tests {
             right: 10_000,
             bottom: 3,
             content_top: 0,
+            has_dense_anchor: false,
         };
 
         for transform in [
@@ -1143,7 +1370,7 @@ mod tests {
             assert!(transform.origin_y.is_finite());
             assert!(transform.cell_width.is_finite());
             assert!(transform.cell_height.is_finite());
-            assert_cover(transform, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
+            assert_art_fits_or_covers(transform, BACKDROP_TILE_WIDTH, BACKDROP_HEIGHT);
         }
     }
 

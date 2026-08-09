@@ -104,7 +104,7 @@ impl InfektApp {
                     .content_fit(ContentFit::Cover)
                     .filter_method(iced::widget::image::FilterMethod::Linear)
                     .scale(1.08_f32)
-                    .opacity(if tokens.is_dark { 0.82_f32 } else { 0.70_f32 }),
+                    .opacity(if tokens.is_dark { 0.82_f32 } else { 0.76_f32 }),
             );
         }
 

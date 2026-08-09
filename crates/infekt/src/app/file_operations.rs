@@ -1,7 +1,9 @@
 use iced::Task;
 use std::path::PathBuf;
 
-use super::{Action, InfektApp, Message};
+use crate::core::nfo_data::NfoData;
+
+use super::{InfektApp, Message};
 
 impl InfektApp {
     pub(super) fn task_open_nfo_file_dialog(&mut self) -> Task<Message> {
@@ -15,20 +17,46 @@ impl InfektApp {
         })
     }
 
-    pub(super) fn action_load_new_nfo(&mut self, file_path: Option<PathBuf>) -> Action {
+    pub(super) fn load_new_nfo(
+        &mut self,
+        file_path: Option<PathBuf>,
+    ) -> Result<Task<Message>, String> {
         let Some(file_path) = file_path else {
-            return Action::None;
+            return Ok(Task::none());
         };
 
-        let status = self.current_nfo.load_from_file(&file_path);
+        self.load_nfo_path(file_path, true)
+    }
 
-        if status.is_err() {
-            return Action::ShowErrorMessage(format!(
-                "Failed to load file: {}",
-                status.err().unwrap()
-            ));
-        }
+    pub(super) fn load_browsed_nfo(&mut self, file_path: PathBuf) -> Result<Task<Message>, String> {
+        self.load_nfo_path(file_path, false)
+    }
 
-        Action::None
+    fn load_nfo_path(
+        &mut self,
+        file_path: PathBuf,
+        restart_browser: bool,
+    ) -> Result<Task<Message>, String> {
+        let mut candidate = NfoData::new();
+        candidate
+            .load_from_file(&file_path)
+            .map_err(|error| format!("Failed to load file: {error}"))?;
+
+        self.current_nfo = candidate;
+        self.backdrop.invalidate_source();
+
+        let scan = if restart_browser {
+            let request = self.folder_browser.begin_for_file(&file_path);
+            Self::scan_task(request)
+        } else {
+            self.folder_browser.set_current_path(&file_path);
+            Task::none()
+        };
+
+        Ok(Task::batch([
+            self.ensure_backdrop(),
+            self.main_view.reset_scroll().map(Message::MainView),
+            scan,
+        ]))
     }
 }

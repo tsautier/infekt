@@ -1,4 +1,5 @@
 mod file_operations;
+mod folder_browser;
 mod theme;
 mod utils;
 mod view;
@@ -6,7 +7,8 @@ mod view;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use iced::{Task, Theme};
+use iced::keyboard::{self, Key, Modifiers};
+use iced::{Subscription, Task, Theme};
 
 use crate::core::nfo_data::NfoData;
 use crate::gui::about_screen::{self, InfektAboutScreen};
@@ -15,6 +17,10 @@ use crate::gui::nfo_backdrop::{BackdropImage, BackdropKey, NfoBackdrop};
 use crate::gui::presentation_inspector::{self, PresentationInspector};
 use crate::presentation::PresentationState;
 use crate::settings::NfoRenderSettings;
+
+use self::folder_browser::{
+    BrowseDirection, FolderBrowser, ScanRequest, ScanResult, ScanUpdate, WatchEvent,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
@@ -25,6 +31,9 @@ pub(crate) enum Message {
     About(about_screen::Message),
     OpenFileDialog,
     OpenFile(Option<PathBuf>),
+    Browse(BrowseDirection),
+    FolderWatch(WatchEvent),
+    FolderScanReady(ScanResult),
     ZoomIn,
     ZoomOut,
     ToggleInspector,
@@ -42,6 +51,7 @@ pub(crate) struct InfektApp {
     about_screen: InfektAboutScreen,
     presentation: PresentationState,
     backdrop: NfoBackdrop,
+    folder_browser: FolderBrowser,
     theme: Option<Theme>,
     active_render_settings: Arc<NfoRenderSettings>,
     current_nfo: NfoData,
@@ -122,24 +132,13 @@ impl InfektApp {
                 Task::none()
             }
             Message::OpenFileDialog => self.task_open_nfo_file_dialog(),
-            Message::OpenFile(file) => {
-                let should_refresh_backdrop = file.is_some();
-
-                if should_refresh_backdrop {
-                    self.backdrop.invalidate_source();
-                }
-
-                let task = match self.load_new_nfo(file) {
-                    Ok(()) => Task::none(),
-                    Err(message) => self.show_error_message_popup(message),
-                };
-
-                if should_refresh_backdrop {
-                    follow_up = self.ensure_backdrop();
-                }
-
-                task
-            }
+            Message::OpenFile(file) => match self.load_new_nfo(file) {
+                Ok(task) => task,
+                Err(message) => self.show_error_message_popup(message),
+            },
+            Message::Browse(direction) => self.browse(direction),
+            Message::FolderWatch(event) => self.handle_folder_watch(event),
+            Message::FolderScanReady(result) => self.handle_folder_scan(result),
             Message::ZoomIn => {
                 self.presentation.zoom_in();
                 self.apply_current_zoom();
@@ -188,6 +187,22 @@ impl InfektApp {
         self.theme.clone()
     }
 
+    pub fn subscription(&self) -> Subscription<Message> {
+        let watcher = self.folder_browser.subscription().map(Message::FolderWatch);
+        let keyboard = if shortcuts_enabled(
+            self.folder_browser.is_active(),
+            self.presentation.about_open,
+            self.presentation.overflow_open,
+        ) {
+            keyboard::listen()
+                .filter_map(|event| browse_direction_for_event(event).map(Message::Browse))
+        } else {
+            Subscription::none()
+        };
+
+        Subscription::batch([watcher, keyboard])
+    }
+
     fn apply_current_zoom(&mut self) {
         let mut settings = (*self.active_render_settings).clone();
         self.presentation.apply_zoom(&mut settings);
@@ -220,6 +235,96 @@ impl InfektApp {
             Message::BackdropReady(key, generation, image)
         })
     }
+
+    fn browse(&mut self, direction: BrowseDirection) -> Task<Message> {
+        let paths = self.folder_browser.paths_in_direction(direction);
+        self.load_first_browsable(paths)
+    }
+
+    fn load_first_browsable(&mut self, paths: Vec<PathBuf>) -> Task<Message> {
+        for path in paths {
+            if let Ok(task) = self.load_browsed_nfo(path) {
+                return task;
+            }
+        }
+
+        Task::none()
+    }
+
+    fn handle_folder_watch(&mut self, event: WatchEvent) -> Task<Message> {
+        match event {
+            WatchEvent::Changed(directory) => {
+                let request = self.folder_browser.request_scan_for(&directory);
+                Self::scan_task(request)
+            }
+            WatchEvent::Failed(directory, error) => {
+                if self.folder_browser.mark_watch_failed(&directory) {
+                    self.show_error_message_popup(format!(
+                        "Folder monitoring stopped for '{}': {error}",
+                        directory.to_string_lossy()
+                    ))
+                } else {
+                    Task::none()
+                }
+            }
+        }
+    }
+
+    fn handle_folder_scan(&mut self, result: ScanResult) -> Task<Message> {
+        let current_path = self.current_nfo.get_file_path().map(PathBuf::from);
+
+        match self
+            .folder_browser
+            .apply_scan(result, current_path.as_deref())
+        {
+            ScanUpdate::Ignored | ScanUpdate::Updated => Task::none(),
+            ScanUpdate::LoadNearest(path) => {
+                let paths = self.folder_browser.replacement_paths(&path);
+                self.load_first_browsable(paths)
+            }
+            ScanUpdate::Failed(message) => self.show_error_message_popup(message),
+        }
+    }
+
+    fn scan_task(request: Option<ScanRequest>) -> Task<Message> {
+        request.map_or_else(Task::none, |request| {
+            Task::perform(async move { request.run() }, Message::FolderScanReady)
+        })
+    }
+}
+
+fn browse_direction_for_event(event: keyboard::Event) -> Option<BrowseDirection> {
+    let keyboard::Event::KeyPressed {
+        modified_key,
+        modifiers,
+        repeat,
+        ..
+    } = event
+    else {
+        return None;
+    };
+
+    browse_direction_for_key(modified_key.as_ref(), modifiers, repeat)
+}
+
+fn browse_direction_for_key(
+    key: Key<&str>,
+    modifiers: Modifiers,
+    repeat: bool,
+) -> Option<BrowseDirection> {
+    if repeat || !modifiers.is_empty() {
+        return None;
+    }
+
+    match key {
+        Key::Character("j") => Some(BrowseDirection::Next),
+        Key::Character("k") => Some(BrowseDirection::Previous),
+        _ => None,
+    }
+}
+
+fn shortcuts_enabled(browser_active: bool, about_open: bool, overflow_open: bool) -> bool {
+    browser_active && !about_open && !overflow_open
 }
 
 #[cfg(test)]
@@ -278,5 +383,105 @@ mod tests {
         assert!(!app.presentation.use_ansi_colors);
         assert!(app.presentation.line_wrapping);
         assert!(!app.presentation.antialiasing);
+    }
+
+    #[test]
+    fn folder_shortcuts_use_unmodified_non_repeated_lowercase_keys() {
+        assert_eq!(
+            browse_direction_for_key(Key::Character("j"), Modifiers::empty(), false),
+            Some(BrowseDirection::Next)
+        );
+        assert_eq!(
+            browse_direction_for_key(Key::Character("k"), Modifiers::empty(), false),
+            Some(BrowseDirection::Previous)
+        );
+        assert_eq!(
+            browse_direction_for_key(Key::Character("J"), Modifiers::empty(), false),
+            None
+        );
+        assert_eq!(
+            browse_direction_for_key(Key::Character("j"), Modifiers::SHIFT, false),
+            None
+        );
+        assert_eq!(
+            browse_direction_for_key(Key::Character("j"), Modifiers::empty(), true),
+            None
+        );
+    }
+
+    #[test]
+    fn folder_shortcuts_are_disabled_behind_shell_overlays() {
+        assert!(shortcuts_enabled(true, false, false));
+        assert!(!shortcuts_enabled(false, false, false));
+        assert!(!shortcuts_enabled(true, true, false));
+        assert!(!shortcuts_enabled(true, false, true));
+    }
+
+    #[test]
+    fn failed_transactional_load_preserves_the_current_nfo() {
+        let directory = tempfile::tempdir().unwrap();
+        let valid = directory.path().join("valid.nfo");
+        std::fs::write(&valid, b"valid NFO").unwrap();
+        let missing = directory.path().join("missing.nfo");
+        let (mut app, _startup) = InfektApp::new();
+
+        let _ = app.load_new_nfo(Some(valid.clone())).unwrap();
+        assert!(app.load_new_nfo(Some(missing)).is_err());
+
+        assert_eq!(app.current_nfo.get_file_path(), Some(valid.as_path()));
+        assert!(app.current_nfo.is_loaded());
+    }
+
+    #[test]
+    fn browsing_skips_invalid_files_and_stops_after_one_cycle() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("release1.nfo");
+        let invalid = directory.path().join("release2.nfo");
+        let third = directory.path().join("release3.nfo");
+        std::fs::write(&first, b"first").unwrap();
+        std::fs::write(&invalid, "x".repeat(2_001)).unwrap();
+        std::fs::write(&third, b"third").unwrap();
+        let (mut app, _startup) = InfektApp::new();
+
+        let _ = app.load_new_nfo(Some(first.clone())).unwrap();
+        let scan = app.folder_browser.request_scan().unwrap().run();
+        assert_eq!(
+            app.folder_browser.apply_scan(scan, Some(&first)),
+            ScanUpdate::Updated
+        );
+
+        let _ = app.browse(BrowseDirection::Next);
+        assert_eq!(app.current_nfo.get_file_path(), Some(third.as_path()));
+
+        std::fs::write(&first, "x".repeat(2_001)).unwrap();
+        let _ = app.browse(BrowseDirection::Next);
+        assert_eq!(app.current_nfo.get_file_path(), Some(third.as_path()));
+    }
+
+    #[test]
+    fn deleting_current_skips_an_invalid_nearest_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("release1.nfo");
+        let current = directory.path().join("release2.nfo");
+        let invalid = directory.path().join("release3.nfo");
+        let fourth = directory.path().join("release4.nfo");
+        std::fs::write(&first, b"first").unwrap();
+        std::fs::write(&current, b"current").unwrap();
+        std::fs::write(&invalid, "x".repeat(2_001)).unwrap();
+        std::fs::write(&fourth, b"fourth").unwrap();
+        let (mut app, _startup) = InfektApp::new();
+
+        let _ = app.load_new_nfo(Some(current.clone())).unwrap();
+        let initial = app.folder_browser.request_scan().unwrap().run();
+        assert_eq!(
+            app.folder_browser.apply_scan(initial, Some(&current)),
+            ScanUpdate::Updated
+        );
+
+        std::fs::remove_file(&current).unwrap();
+        let rescan = app.folder_browser.request_scan().unwrap().run();
+        let _ = app.handle_folder_scan(rescan);
+
+        assert_eq!(app.current_nfo.get_file_path(), Some(fourth.as_path()));
     }
 }

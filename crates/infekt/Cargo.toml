@@ -38,3 +38,7 @@ colornames = "0.0.6"
 fontdb = "0.23.0"
 open = { version = "5.3.2", features = ["shellexecute-on-windows"] }
 image = { version = "0.25.10", default-features = false }
+notify = "8.2.0"
+
+[dev-dependencies]
+tempfile = "3.27.0"

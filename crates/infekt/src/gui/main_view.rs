@@ -3,15 +3,20 @@ mod classic_view;
 use std::sync::Arc;
 
 use iced::Length::Fill;
-use iced::widget::scrollable::{Direction, Scrollbar};
+use iced::widget::operation;
+use iced::widget::scrollable::{Direction, RelativeOffset, Scrollbar};
 use iced::widget::{self, scrollable};
-use iced::{Color, Element};
+use iced::{Color, Element, Task};
 
 use crate::core::nfo_data::NfoData;
 use crate::settings::NfoRenderSettings;
 
 use super::widget::enhanced_nfo_view::EnhancedNfoView;
 use super::widget::nfo_paper::NfoPaper;
+
+const ENHANCED_SCROLL_ID: &str = "enhanced view";
+pub(super) const CLASSIC_SCROLL_ID: &str = "main view classic";
+pub(super) const TEXT_ONLY_SCROLL_ID: &str = "main view stripped";
 
 #[derive(Default)]
 pub struct InfektMainView {
@@ -45,6 +50,14 @@ impl InfektMainView {
         }
     }
 
+    pub fn reset_scroll(&self) -> Task<Message> {
+        Task::batch([
+            operation::snap_to(widget::Id::new(ENHANCED_SCROLL_ID), RelativeOffset::START),
+            operation::snap_to(widget::Id::new(CLASSIC_SCROLL_ID), RelativeOffset::START),
+            operation::snap_to(widget::Id::new(TEXT_ONLY_SCROLL_ID), RelativeOffset::START),
+        ])
+    }
+
     pub fn view<'a>(&self, current_nfo: &'a NfoData) -> Element<'a, Message> {
         match self.active_tab {
             TabId::Enhanced => self.enhanced_tab(current_nfo),
@@ -62,7 +75,7 @@ impl InfektMainView {
         };
 
         scrollable(content)
-            .id(widget::Id::new("enhanced view"))
+            .id(widget::Id::new(ENHANCED_SCROLL_ID))
             .direction(Direction::Both {
                 vertical: Scrollbar::default(),
                 horizontal: Scrollbar::default(),

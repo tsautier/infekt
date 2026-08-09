@@ -23,6 +23,10 @@ const EXPORT_ICON: &[u8] =
     include_bytes!("../../../../third_party/tabler-icons/outline/upload.svg");
 const MORE_ICON: &[u8] = include_bytes!("../../../../third_party/tabler-icons/outline/dots.svg");
 const CLOSE_ICON: &[u8] = include_bytes!("../../../../third_party/tabler-icons/outline/x.svg");
+const PREVIOUS_ICON: &[u8] =
+    include_bytes!("../../../../third_party/tabler-icons/outline/chevron-left.svg");
+const NEXT_ICON: &[u8] =
+    include_bytes!("../../../../third_party/tabler-icons/outline/chevron-right.svg");
 
 impl InfektApp {
     pub fn view(&self) -> Element<'_, Message> {
@@ -45,6 +49,15 @@ impl InfektApp {
                 SurfaceRole::Canvas
             },
         ));
+        let viewer: Element<'_, Message> =
+            if let Some((position, total)) = self.folder_browser.position() {
+                stack![viewer, self.folder_navigator(tokens, position, total)]
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
+            } else {
+                viewer.into()
+            };
 
         let content: Element<'_, Message> = if self.presentation.inspector_open {
             let inspector = self
@@ -69,7 +82,7 @@ impl InfektApp {
 
             row![viewer, inspector].height(Length::Fill).into()
         } else {
-            viewer.into()
+            viewer
         };
 
         let base = container(space::horizontal())
@@ -316,6 +329,52 @@ impl InfektApp {
             .padding(6)
             .width(170)
             .style(shell_style::surface(tokens, SurfaceRole::Glass))
+            .into()
+    }
+
+    fn folder_navigator(
+        &self,
+        tokens: ShellTokens,
+        position: usize,
+        total: usize,
+    ) -> Element<'_, Message> {
+        let previous = button(icon(PREVIOUS_ICON, tokens.text, 16.0))
+            .width(30)
+            .height(30)
+            .padding(6)
+            .on_press(Message::Browse(
+                super::folder_browser::BrowseDirection::Previous,
+            ))
+            .style(shell_style::button_style(tokens, ButtonRole::Toolbar));
+        let next = button(icon(NEXT_ICON, tokens.text, 16.0))
+            .width(30)
+            .height(30)
+            .padding(6)
+            .on_press(Message::Browse(
+                super::folder_browser::BrowseDirection::Next,
+            ))
+            .style(shell_style::button_style(tokens, ButtonRole::Toolbar));
+        let position = text(format!("{position} of {total}"))
+            .size(12)
+            .center()
+            .width(68);
+        let navigator = container(
+            row![previous, position, next]
+                .spacing(3)
+                .align_y(Alignment::Center),
+        )
+        .padding(4)
+        .style(shell_style::surface(tokens, SurfaceRole::NavigatorGlass));
+
+        container(navigator)
+            .center_x(Length::Fill)
+            .align_bottom(Length::Fill)
+            .padding(iced::Padding {
+                top: 0.0,
+                right: 0.0,
+                bottom: 24.0,
+                left: 0.0,
+            })
             .into()
     }
 

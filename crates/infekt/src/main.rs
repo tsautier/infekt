@@ -29,6 +29,7 @@ pub fn main() -> iced::Result {
         .centered()
         .title(InfektApp::title)
         .theme(InfektApp::theme)
+        .subscription(InfektApp::subscription)
         .run()
 }
 

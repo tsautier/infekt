@@ -1,4 +1,4 @@
-use super::{InfektMainView, Message, nfo_paper_color};
+use super::{CLASSIC_SCROLL_ID, InfektMainView, Message, TEXT_ONLY_SCROLL_ID, nfo_paper_color};
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -18,9 +18,9 @@ impl InfektMainView {
         stripped: bool,
     ) -> Element<'a, Message> {
         let scrollable_id = widget::Id::new(if stripped {
-            "main view stripped"
+            TEXT_ONLY_SCROLL_ID
         } else {
-            "main view classic"
+            CLASSIC_SCROLL_ID
         });
         let _has_blocks = !stripped && current_nfo.has_blocks();
         let content = (if stripped {

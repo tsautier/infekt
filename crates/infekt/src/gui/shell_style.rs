@@ -143,6 +143,7 @@ pub(crate) enum SurfaceRole {
     Inspector,
     BackdropInspector,
     Glass,
+    NavigatorGlass,
     ModalGlass,
     Raised,
     Input,
@@ -254,6 +255,15 @@ fn surface_appearance(tokens: ShellTokens, role: SurfaceRole) -> container::Styl
             tokens.glass.into(),
             tokens.panel_border(tokens.border),
             tokens.shadow,
+        ),
+        SurfaceRole::NavigatorGlass => (
+            tokens.glass.into(),
+            tokens.panel_border(tokens.border),
+            Shadow {
+                offset: Vector::new(0.0, 10.0),
+                blur_radius: 30.0,
+                ..tokens.shadow
+            },
         ),
         SurfaceRole::ModalGlass => {
             let base = composite(tokens.raised, tokens.root);
@@ -747,6 +757,24 @@ mod tests {
                     .flatten()
                     .all(|stop| stop.color.a == 1.0)
             );
+        }
+    }
+
+    #[test]
+    fn navigator_uses_the_overflow_menu_glass_background() {
+        let dark = ShellTokens::from_settings(&NfoRenderSettings {
+            background_color: Rgb::new(0.01, 0.02, 0.02),
+            ..NfoRenderSettings::default()
+        });
+        let light = ShellTokens::from_settings(&NfoRenderSettings::default());
+
+        for tokens in [dark, light] {
+            let navigator = surface_appearance(tokens, SurfaceRole::NavigatorGlass);
+            let overflow = surface_appearance(tokens, SurfaceRole::Glass);
+
+            assert_eq!(navigator.background, overflow.background);
+            assert_eq!(navigator.border, overflow.border);
+            assert_eq!(navigator.shadow.blur_radius, 30.0);
         }
     }
 

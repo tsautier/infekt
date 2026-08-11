@@ -6,25 +6,53 @@ use iced::{Color, Element, Event, Length, Point, Rectangle, Shadow, Size, Vector
 
 const PAPER_PADDING: f32 = 24.0;
 const PAPER_FADE_RADIUS: f32 = 24.0;
+const PAPER_GLOW_INNER_RADIUS: f32 = 36.0;
+const PAPER_GLOW_OUTER_RADIUS: f32 = 64.0;
+const PAPER_GLOW_INNER_DARK_OPACITY: f32 = 0.22;
+const PAPER_GLOW_INNER_LIGHT_OPACITY: f32 = 0.14;
+const PAPER_GLOW_OUTER_DARK_OPACITY: f32 = 0.10;
+const PAPER_GLOW_OUTER_LIGHT_OPACITY: f32 = 0.06;
+const PAPER_GLOW_BLOCK_ART_OPACITY_SCALE: f32 = 0.5;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct NfoPaperStyle {
+    background: Color,
+    art: Color,
+    is_dark: bool,
+}
+
+impl NfoPaperStyle {
+    pub(crate) fn new(background: Color, art: Color, is_dark: bool) -> Self {
+        Self {
+            background,
+            art,
+            is_dark,
+        }
+    }
+}
 
 /// Draws an opaque paper around intrinsic NFO content.
 ///
 /// A bidirectional scrollable compresses ordinary `Fill` containers to their
 /// intrinsic width. This widget keeps those intrinsic scroll bounds, then
-/// visually centers the paper whenever it fits inside the current viewport.
+/// visually centers the paper whenever it fits inside the current viewport
+/// and extends short papers to the bottom of that viewport.
 pub(crate) struct NfoPaper<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer> {
     content: Element<'a, Message, Theme, Renderer>,
-    background: Color,
+    style: NfoPaperStyle,
+    has_blocks: bool,
 }
 
 impl<'a, Message, Theme, Renderer> NfoPaper<'a, Message, Theme, Renderer> {
     pub(crate) fn new(
         content: impl Into<Element<'a, Message, Theme, Renderer>>,
-        background: Color,
+        style: NfoPaperStyle,
+        has_blocks: bool,
     ) -> Self {
         Self {
             content: content.into(),
-            background,
+            style,
+            has_blocks,
         }
     }
 }
@@ -141,23 +169,33 @@ where
     ) {
         let bounds = layout.bounds();
         let translation = paper_translation(bounds, *viewport);
-        let presented_bounds = bounds + translation;
+        let presented_bounds = presented_paper_bounds(bounds, *viewport);
 
         if !presented_bounds
-            .expand(PAPER_FADE_RADIUS)
+            .expand(PAPER_GLOW_OUTER_RADIUS.max(PAPER_FADE_RADIUS))
             .intersects(viewport)
         {
             return;
         }
 
         renderer.with_layer(*viewport, |renderer| {
+            for shadow in paper_glows(self.style.art, self.style.is_dark, self.has_blocks) {
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: presented_bounds,
+                        shadow,
+                        ..renderer::Quad::default()
+                    },
+                    Color::TRANSPARENT,
+                );
+            }
             renderer.fill_quad(
                 renderer::Quad {
                     bounds: presented_bounds,
-                    shadow: paper_fade(self.background),
+                    shadow: paper_fade(self.style.background),
                     ..renderer::Quad::default()
                 },
-                self.background,
+                self.style.background,
             );
         });
 
@@ -217,6 +255,13 @@ fn paper_translation(bounds: Rectangle, viewport: Rectangle) -> Vector {
     Vector::new(horizontal_offset(bounds.width, viewport.width), 0.0)
 }
 
+fn presented_paper_bounds(bounds: Rectangle, viewport: Rectangle) -> Rectangle {
+    let mut presented = bounds + paper_translation(bounds, viewport);
+    let height_to_viewport_bottom = (viewport.y + viewport.height - presented.y).max(0.0);
+    presented.height = presented.height.max(height_to_viewport_bottom);
+    presented
+}
+
 fn horizontal_offset(paper_width: f32, viewport_width: f32) -> f32 {
     ((viewport_width - paper_width) * 0.5).max(0.0)
 }
@@ -229,13 +274,50 @@ fn paper_fade(background: Color) -> Shadow {
     }
 }
 
+fn paper_glows(art_color: Color, is_dark: bool, has_blocks: bool) -> [Shadow; 2] {
+    let (outer_opacity, inner_opacity) = if is_dark {
+        (PAPER_GLOW_OUTER_DARK_OPACITY, PAPER_GLOW_INNER_DARK_OPACITY)
+    } else {
+        (
+            PAPER_GLOW_OUTER_LIGHT_OPACITY,
+            PAPER_GLOW_INNER_LIGHT_OPACITY,
+        )
+    };
+    let content_opacity = if has_blocks {
+        PAPER_GLOW_BLOCK_ART_OPACITY_SCALE
+    } else {
+        1.0
+    };
+
+    [
+        Shadow {
+            color: Color {
+                a: art_color.a * outer_opacity * content_opacity,
+                ..art_color
+            },
+            blur_radius: PAPER_GLOW_OUTER_RADIUS,
+            ..Shadow::default()
+        },
+        Shadow {
+            color: Color {
+                a: art_color.a * inner_opacity * content_opacity,
+                ..art_color
+            },
+            blur_radius: PAPER_GLOW_INNER_RADIUS,
+            ..Shadow::default()
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use iced::{Color, Rectangle, Shadow, Size, Vector};
 
     use super::{
-        PAPER_FADE_RADIUS, PAPER_PADDING, horizontal_offset, paper_fade, paper_size,
-        paper_translation,
+        PAPER_FADE_RADIUS, PAPER_GLOW_BLOCK_ART_OPACITY_SCALE, PAPER_GLOW_INNER_DARK_OPACITY,
+        PAPER_GLOW_INNER_LIGHT_OPACITY, PAPER_GLOW_INNER_RADIUS, PAPER_GLOW_OUTER_DARK_OPACITY,
+        PAPER_GLOW_OUTER_LIGHT_OPACITY, PAPER_GLOW_OUTER_RADIUS, PAPER_PADDING, horizontal_offset,
+        paper_fade, paper_glows, paper_size, paper_translation, presented_paper_bounds,
     };
 
     #[test]
@@ -263,6 +345,39 @@ mod tests {
     }
 
     #[test]
+    fn short_paper_extends_to_the_bottom_of_the_viewport() {
+        let bounds = Rectangle::new([0.0, 12.0].into(), Size::new(608.0, 448.0));
+        let viewport = Rectangle::new([0.0, 0.0].into(), Size::new(1_000.0, 700.0));
+
+        assert_eq!(
+            presented_paper_bounds(bounds, viewport),
+            Rectangle::new([196.0, 12.0].into(), Size::new(608.0, 688.0))
+        );
+    }
+
+    #[test]
+    fn long_paper_keeps_its_intrinsic_scroll_height() {
+        let bounds = Rectangle::new([0.0, 0.0].into(), Size::new(608.0, 900.0));
+        let viewport = Rectangle::new([0.0, 0.0].into(), Size::new(1_000.0, 700.0));
+
+        assert_eq!(
+            presented_paper_bounds(bounds, viewport),
+            Rectangle::new([196.0, 0.0].into(), Size::new(608.0, 900.0))
+        );
+    }
+
+    #[test]
+    fn scrolling_a_long_paper_does_not_extend_its_document_height() {
+        let bounds = Rectangle::new([0.0, 62.0].into(), Size::new(608.0, 1_200.0));
+        let viewport = Rectangle::new([0.0, 562.0].into(), Size::new(1_000.0, 700.0));
+
+        assert_eq!(
+            presented_paper_bounds(bounds, viewport),
+            Rectangle::new([196.0, 62.0].into(), Size::new(608.0, 1_200.0))
+        );
+    }
+
+    #[test]
     fn paper_fade_is_theme_colored_and_does_not_change_layout() {
         let background = Color::from_rgb(0.125, 0.25, 0.75);
 
@@ -276,5 +391,60 @@ mod tests {
             }
         );
         assert_eq!(paper_size(Size::new(560.0, 400.0)), Size::new(608.0, 448.0));
+    }
+
+    #[test]
+    fn paper_glow_uses_the_art_color_without_changing_layout() {
+        let art_color = Color::from_rgba(0.125, 0.75, 0.5, 0.5);
+
+        assert_eq!(
+            paper_glows(art_color, true, false),
+            [
+                Shadow {
+                    color: Color::from_rgba(0.125, 0.75, 0.5, 0.5 * PAPER_GLOW_OUTER_DARK_OPACITY,),
+                    offset: Vector::ZERO,
+                    blur_radius: PAPER_GLOW_OUTER_RADIUS,
+                },
+                Shadow {
+                    color: Color::from_rgba(0.125, 0.75, 0.5, 0.5 * PAPER_GLOW_INNER_DARK_OPACITY,),
+                    offset: Vector::ZERO,
+                    blur_radius: PAPER_GLOW_INNER_RADIUS,
+                },
+            ]
+        );
+        assert_eq!(paper_size(Size::new(560.0, 400.0)), Size::new(608.0, 448.0));
+    }
+
+    #[test]
+    fn bright_paper_glow_is_more_subtle() {
+        let art_color = Color::from_rgb(0.125, 0.75, 0.5);
+        let [outer, inner] = paper_glows(art_color, false, false);
+
+        assert_eq!(outer.color.a, PAPER_GLOW_OUTER_LIGHT_OPACITY);
+        assert_eq!(inner.color.a, PAPER_GLOW_INNER_LIGHT_OPACITY);
+        assert!(outer.color.a < PAPER_GLOW_OUTER_DARK_OPACITY);
+        assert!(inner.color.a < PAPER_GLOW_INNER_DARK_OPACITY);
+    }
+
+    #[test]
+    fn block_art_halves_both_paper_glow_layers() {
+        let art_color = Color::from_rgba(0.125, 0.75, 0.5, 0.8);
+
+        for is_dark in [false, true] {
+            let regular = paper_glows(art_color, is_dark, false);
+            let with_blocks = paper_glows(art_color, is_dark, true);
+
+            for (regular, with_blocks) in regular.into_iter().zip(with_blocks) {
+                assert_eq!(with_blocks.color.r, regular.color.r);
+                assert_eq!(with_blocks.color.g, regular.color.g);
+                assert_eq!(with_blocks.color.b, regular.color.b);
+                assert_eq!(with_blocks.blur_radius, regular.blur_radius);
+                assert_eq!(with_blocks.offset, regular.offset);
+                assert_eq!(
+                    with_blocks.color.a,
+                    regular.color.a * PAPER_GLOW_BLOCK_ART_OPACITY_SCALE
+                );
+            }
+        }
     }
 }

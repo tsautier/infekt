@@ -9,3 +9,4 @@ mod widget;
 
 pub(crate) use widget::adjacent_pair::AdjacentPair;
 pub(crate) use widget::anchored_overlay::AnchoredOverlay;
+pub(crate) use widget::backdrop_parallax::BackdropParallax;

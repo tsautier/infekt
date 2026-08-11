@@ -1,3 +1,4 @@
+mod file_drop;
 mod file_operations;
 mod folder_browser;
 mod theme;
@@ -18,6 +19,7 @@ use crate::gui::presentation_inspector::{self, PresentationInspector};
 use crate::presentation::PresentationState;
 use crate::settings::NfoRenderSettings;
 
+use self::file_drop::{FileDropEvent, FileDropOutcome, FileDropState};
 use self::folder_browser::{
     BrowseDirection, FolderBrowser, ScanRequest, ScanResult, ScanUpdate, WatchEvent,
 };
@@ -31,6 +33,7 @@ pub(crate) enum Message {
     About(about_screen::Message),
     OpenFileDialog,
     OpenFile(Option<PathBuf>),
+    FileDrop(iced::window::Id, FileDropEvent),
     Browse(BrowseDirection),
     FolderWatch(WatchEvent),
     FolderScanReady(ScanResult),
@@ -52,6 +55,7 @@ pub(crate) struct InfektApp {
     presentation: PresentationState,
     backdrop: NfoBackdrop,
     folder_browser: FolderBrowser,
+    file_drop: FileDropState,
     theme: Option<Theme>,
     active_render_settings: Arc<NfoRenderSettings>,
     current_nfo: NfoData,
@@ -132,10 +136,24 @@ impl InfektApp {
                 Task::none()
             }
             Message::OpenFileDialog => self.task_open_nfo_file_dialog(),
-            Message::OpenFile(file) => match self.load_new_nfo(file) {
-                Ok(task) => task,
-                Err(message) => self.show_error_message_popup(message),
-            },
+            Message::OpenFile(file) => self.open_file(file),
+            Message::FileDrop(window_id, event) => {
+                if self.main_window_id != Some(window_id) {
+                    Task::none()
+                } else {
+                    if matches!(&event, FileDropEvent::Hovered(_)) {
+                        self.presentation.overflow_open = false;
+                    }
+
+                    match self.file_drop.handle(event) {
+                        FileDropOutcome::None => Task::none(),
+                        FileDropOutcome::Open(path) => self.open_file(Some(path)),
+                        FileDropOutcome::RejectMultiple => self.show_error_message_popup(
+                            "Please drop exactly one file at a time.".to_owned(),
+                        ),
+                    }
+                }
+            }
             Message::Browse(direction) => self.browse(direction),
             Message::FolderWatch(event) => self.handle_folder_watch(event),
             Message::FolderScanReady(result) => self.handle_folder_scan(result),
@@ -199,8 +217,25 @@ impl InfektApp {
         } else {
             Subscription::none()
         };
+        let file_drop = iced::window::events().filter_map(|(window_id, event)| {
+            let event = match event {
+                iced::window::Event::FileHovered(path) => FileDropEvent::Hovered(path),
+                iced::window::Event::FileDropped(path) => FileDropEvent::Dropped(path),
+                iced::window::Event::FilesHoveredLeft => FileDropEvent::Left,
+                _ => return None,
+            };
 
-        Subscription::batch([watcher, keyboard])
+            Some(Message::FileDrop(window_id, event))
+        });
+
+        Subscription::batch([watcher, keyboard, file_drop])
+    }
+
+    fn open_file(&mut self, file: Option<PathBuf>) -> Task<Message> {
+        match self.load_new_nfo(file) {
+            Ok(task) => task,
+            Err(message) => self.show_error_message_popup(message),
+        }
     }
 
     fn apply_current_zoom(&mut self) {
@@ -430,6 +465,89 @@ mod tests {
 
         assert_eq!(app.current_nfo.get_file_path(), Some(valid.as_path()));
         assert!(app.current_nfo.is_loaded());
+    }
+
+    #[test]
+    fn file_drop_events_only_apply_to_the_main_window() {
+        let (mut app, _startup) = InfektApp::new();
+        let main_window = iced::window::Id::unique();
+        let other_window = iced::window::Id::unique();
+        app.main_window_id = Some(main_window);
+
+        let _ = app.update(Message::FileDrop(
+            other_window,
+            FileDropEvent::Hovered(PathBuf::from("ignored.nfo")),
+        ));
+        assert_eq!(app.file_drop.hover(), None);
+
+        let _ = app.update(Message::FileDrop(
+            main_window,
+            FileDropEvent::Hovered(PathBuf::from("accepted.nfo")),
+        ));
+        assert!(app.file_drop.hover().is_some());
+
+        let _ = app.update(Message::FileDrop(other_window, FileDropEvent::Left));
+        let _ = app.update(Message::FileDrop(
+            other_window,
+            FileDropEvent::Dropped(PathBuf::from("ignored.nfo")),
+        ));
+        assert!(app.file_drop.hover().is_some());
+    }
+
+    #[test]
+    fn accepted_drop_uses_the_regular_loader_without_an_extension_filter() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("release.bin");
+        std::fs::write(&path, b"valid NFO").unwrap();
+        let (mut app, _startup) = InfektApp::new();
+        let main_window = iced::window::Id::unique();
+        app.main_window_id = Some(main_window);
+
+        let _ = app.update(Message::FileDrop(
+            main_window,
+            FileDropEvent::Hovered(path.clone()),
+        ));
+        let _ = app.update(Message::FileDrop(
+            main_window,
+            FileDropEvent::Dropped(path.clone()),
+        ));
+
+        assert_eq!(app.current_nfo.get_file_path(), Some(path.as_path()));
+        assert!(app.current_nfo.is_loaded());
+        assert_eq!(app.file_drop.hover(), None);
+    }
+
+    #[test]
+    fn invalid_drops_preserve_the_current_nfo() {
+        let directory = tempfile::tempdir().unwrap();
+        let valid = directory.path().join("valid.nfo");
+        std::fs::write(&valid, b"valid NFO").unwrap();
+        let missing = directory.path().join("missing.nfo");
+        let malformed = directory.path().join("malformed.nfo");
+        std::fs::write(&malformed, "x".repeat(2_001)).unwrap();
+        let oversized = directory.path().join("oversized.nfo");
+        std::fs::write(&oversized, vec![b'x'; 3 * 1024 * 1024 + 1]).unwrap();
+        let (mut app, _startup) = InfektApp::new();
+        let main_window = iced::window::Id::unique();
+        app.main_window_id = Some(main_window);
+        let _ = app.load_new_nfo(Some(valid.clone())).unwrap();
+
+        for path in [
+            directory.path().to_path_buf(),
+            missing,
+            malformed,
+            oversized,
+        ] {
+            let _ = app.update(Message::FileDrop(
+                main_window,
+                FileDropEvent::Hovered(path.clone()),
+            ));
+            let _ = app.update(Message::FileDrop(main_window, FileDropEvent::Dropped(path)));
+
+            assert_eq!(app.current_nfo.get_file_path(), Some(valid.as_path()));
+            assert!(app.current_nfo.is_loaded());
+            assert_eq!(app.file_drop.hover(), None);
+        }
     }
 
     #[test]

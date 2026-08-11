@@ -21,6 +21,10 @@ Release tags build Apple Silicon macOS, ARM64 and x86-64 Linux, and
 x86-64 Windows archives for both applications. The Windows release also
 includes an MSI installer for the iNFekt desktop application.
 
+The desktop application accepts a single file dropped anywhere on its main
+window on macOS, Windows, and Linux/X11. File drag-and-drop is not currently
+available on Wayland because Iced 0.14 does not expose those window events.
+
 The C++ 1.x maintenance tree can still be configured explicitly:
 
 ```sh

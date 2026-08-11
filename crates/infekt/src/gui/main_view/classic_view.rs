@@ -1,4 +1,6 @@
-use super::{CLASSIC_SCROLL_ID, InfektMainView, Message, TEXT_ONLY_SCROLL_ID, nfo_paper_color};
+use super::{
+    CLASSIC_SCROLL_ID, InfektMainView, Message, TEXT_ONLY_SCROLL_ID, TabId, nfo_paper_style,
+};
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -17,12 +19,12 @@ impl InfektMainView {
         current_nfo: &'a NfoData,
         stripped: bool,
     ) -> Element<'a, Message> {
-        let scrollable_id = widget::Id::new(if stripped {
-            TEXT_ONLY_SCROLL_ID
+        let (tab, scrollable_id) = if stripped {
+            (TabId::TextOnly, TEXT_ONLY_SCROLL_ID)
         } else {
-            CLASSIC_SCROLL_ID
-        });
-        let _has_blocks = !stripped && current_nfo.has_blocks();
+            (TabId::Classic, CLASSIC_SCROLL_ID)
+        };
+        let scrollable_id = widget::Id::new(scrollable_id);
         let content = (if stripped {
             self.stripped_content(current_nfo)
         } else {
@@ -36,7 +38,8 @@ impl InfektMainView {
         let content: Element<'a, Message> = if current_nfo.is_loaded() {
             NfoPaper::new(
                 content,
-                nfo_paper_color(self.active_render_settings.as_ref()),
+                nfo_paper_style(self.active_render_settings.as_ref()),
+                current_nfo.has_blocks(),
             )
             .into()
         } else {
@@ -45,6 +48,7 @@ impl InfektMainView {
 
         scrollable(content)
             .id(scrollable_id)
+            .on_scroll(move |viewport| Message::Scrolled(tab, viewport.absolute_offset()))
             .direction(Direction::Both {
                 vertical: Scrollbar::default(),
                 horizontal: Scrollbar::default(),

@@ -1,11 +1,12 @@
 use iced::gradient;
 use iced::widget::{button, column, container, opaque, row, space, stack, svg, text};
-use iced::{Alignment, Background, Color, ContentFit, Element, Length, Theme};
+use iced::{Alignment, Background, Color, Element, Length, Theme};
 
 use crate::gui::main_view::{self, TabId};
 use crate::gui::shell_style::{self, ButtonRole, ShellTokens, SurfaceRole};
-use crate::gui::{AdjacentPair, AnchoredOverlay};
+use crate::gui::{AdjacentPair, AnchoredOverlay, BackdropParallax};
 
+use super::file_drop::FileDropHover;
 use super::{InfektApp, Message};
 
 const TOOLBAR_HEIGHT: f32 = 62.0;
@@ -27,6 +28,10 @@ const PREVIOUS_ICON: &[u8] =
     include_bytes!("../../../../third_party/tabler-icons/outline/chevron-left.svg");
 const NEXT_ICON: &[u8] =
     include_bytes!("../../../../third_party/tabler-icons/outline/chevron-right.svg");
+const DROP_ICON: &[u8] =
+    include_bytes!("../../../../third_party/tabler-icons/outline/drag-drop.svg");
+const DROP_WARNING_ICON: &[u8] =
+    include_bytes!("../../../../third_party/tabler-icons/outline/alert-triangle.svg");
 
 impl InfektApp {
     pub fn view(&self) -> Element<'_, Message> {
@@ -97,15 +102,12 @@ impl InfektApp {
         let mut root = stack![base].width(Length::Fill).height(Length::Fill);
 
         if let Some(handle) = backdrop {
-            root = root.push(
-                iced::widget::image(handle)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .content_fit(ContentFit::Cover)
-                    .filter_method(iced::widget::image::FilterMethod::Linear)
-                    .scale(1.08_f32)
-                    .opacity(if tokens.is_dark { 0.82_f32 } else { 0.76_f32 }),
-            );
+            root = root.push(BackdropParallax::new(
+                handle,
+                self.main_view.backdrop_translation(),
+                if tokens.is_dark { 0.82_f32 } else { 0.76_f32 },
+                main_view::BACKDROP_PARALLAX_LIMIT,
+            ));
         }
 
         root = root.push(shell);
@@ -114,6 +116,10 @@ impl InfektApp {
 
         if self.presentation.about_open {
             layers = layers.push(self.about_overlay(tokens));
+        }
+
+        if let Some(hover) = self.file_drop.hover() {
+            layers = layers.push(self.file_drop_overlay(tokens, hover));
         }
 
         layers.into()
@@ -398,6 +404,58 @@ impl InfektApp {
 
         opaque(
             container(modal)
+                .center(Length::Fill)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(move |_| {
+                    container::Style::default().background(Color::from_rgba(0.0, 0.0, 0.0, 0.34))
+                }),
+        )
+    }
+
+    fn file_drop_overlay(
+        &self,
+        tokens: ShellTokens,
+        hover: FileDropHover<'_>,
+    ) -> Element<'_, Message> {
+        let (message, cue_icon, cue_color) = match hover {
+            FileDropHover::Single(path) => {
+                let filename = path
+                    .file_name()
+                    .unwrap_or(path.as_os_str())
+                    .to_string_lossy();
+
+                (format!("Drop to open {filename}"), DROP_ICON, tokens.accent)
+            }
+            FileDropHover::Multiple(count) => (
+                format!("{count} files selected — drop exactly one file"),
+                DROP_WARNING_ICON,
+                self.theme
+                    .as_ref()
+                    .map_or(tokens.secondary_accent, |theme| theme.palette().warning),
+            ),
+        };
+        let cue = container(
+            column![
+                icon(cue_icon, cue_color, 44.0),
+                text(message)
+                    .size(20)
+                    .color(tokens.text)
+                    .center()
+                    .width(Length::Fill)
+                    .wrapping(text::Wrapping::WordOrGlyph),
+            ]
+            .spacing(16)
+            .align_x(Alignment::Center),
+        )
+        .padding([28, 36])
+        .width(Length::Fill)
+        .max_width(560)
+        .style(shell_style::surface(tokens, SurfaceRole::ModalGlass));
+
+        opaque(
+            container(cue)
+                .padding(24)
                 .center(Length::Fill)
                 .width(Length::Fill)
                 .height(Length::Fill)

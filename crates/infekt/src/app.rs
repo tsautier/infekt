@@ -208,12 +208,13 @@ impl InfektApp {
     pub fn subscription(&self) -> Subscription<Message> {
         let watcher = self.folder_browser.subscription().map(Message::FolderWatch);
         let keyboard = if shortcuts_enabled(
-            self.folder_browser.is_active(),
             self.presentation.about_open,
             self.presentation.overflow_open,
         ) {
-            keyboard::listen()
-                .filter_map(|event| browse_direction_for_event(event).map(Message::Browse))
+            let browser_active = self.folder_browser.is_active();
+            keyboard::listen().filter_map(move |event| {
+                shortcut_for_event(event, browser_active).map(Shortcut::message)
+            })
         } else {
             Subscription::none()
         };
@@ -328,7 +329,24 @@ impl InfektApp {
     }
 }
 
-fn browse_direction_for_event(event: keyboard::Event) -> Option<BrowseDirection> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shortcut {
+    ZoomIn,
+    ZoomOut,
+    Browse(BrowseDirection),
+}
+
+impl Shortcut {
+    fn message(self) -> Message {
+        match self {
+            Self::ZoomIn => Message::ZoomIn,
+            Self::ZoomOut => Message::ZoomOut,
+            Self::Browse(direction) => Message::Browse(direction),
+        }
+    }
+}
+
+fn shortcut_for_event(event: keyboard::Event, browser_active: bool) -> Option<Shortcut> {
     let keyboard::Event::KeyPressed {
         modified_key,
         modifiers,
@@ -339,7 +357,37 @@ fn browse_direction_for_event(event: keyboard::Event) -> Option<BrowseDirection>
         return None;
     };
 
-    browse_direction_for_key(modified_key.as_ref(), modifiers, repeat)
+    shortcut_for_key(modified_key.as_ref(), modifiers, repeat, browser_active)
+}
+
+fn shortcut_for_key(
+    key: Key<&str>,
+    modifiers: Modifiers,
+    repeat: bool,
+    browser_active: bool,
+) -> Option<Shortcut> {
+    if repeat {
+        return None;
+    }
+
+    zoom_shortcut_for_key(key.clone(), modifiers).or_else(|| {
+        browser_active
+            .then(|| browse_direction_for_key(key, modifiers, false))
+            .flatten()
+            .map(Shortcut::Browse)
+    })
+}
+
+fn zoom_shortcut_for_key(key: Key<&str>, modifiers: Modifiers) -> Option<Shortcut> {
+    if modifiers.difference(Modifiers::SHIFT) != Modifiers::COMMAND {
+        return None;
+    }
+
+    match key {
+        Key::Character("+" | "=") => Some(Shortcut::ZoomIn),
+        Key::Character("-") => Some(Shortcut::ZoomOut),
+        _ => None,
+    }
 }
 
 fn browse_direction_for_key(
@@ -358,8 +406,8 @@ fn browse_direction_for_key(
     }
 }
 
-fn shortcuts_enabled(browser_active: bool, about_open: bool, overflow_open: bool) -> bool {
-    browser_active && !about_open && !overflow_open
+fn shortcuts_enabled(about_open: bool, overflow_open: bool) -> bool {
+    !about_open && !overflow_open
 }
 
 #[cfg(test)]
@@ -391,7 +439,7 @@ mod tests {
         assert_eq!(app.main_view.active_tab(), TabId::Classic);
 
         let _ = app.update(Message::ZoomIn);
-        assert_eq!(app.presentation.zoom_percent, 125);
+        assert_eq!(app.presentation.zoom_percent, 110);
 
         let _ = app.update(Message::Inspector(
             presentation_inspector::Message::ThemeSelected(NfoThemePreset::CobaltPaper),
@@ -446,10 +494,64 @@ mod tests {
 
     #[test]
     fn folder_shortcuts_are_disabled_behind_shell_overlays() {
-        assert!(shortcuts_enabled(true, false, false));
-        assert!(!shortcuts_enabled(false, false, false));
-        assert!(!shortcuts_enabled(true, true, false));
-        assert!(!shortcuts_enabled(true, false, true));
+        assert!(shortcuts_enabled(false, false));
+        assert!(!shortcuts_enabled(true, false));
+        assert!(!shortcuts_enabled(false, true));
+    }
+
+    #[test]
+    fn zoom_shortcuts_use_the_platform_command_modifier() {
+        assert_eq!(
+            shortcut_for_key(Key::Character("="), Modifiers::COMMAND, false, false),
+            Some(Shortcut::ZoomIn)
+        );
+        assert_eq!(
+            shortcut_for_key(
+                Key::Character("+"),
+                Modifiers::COMMAND | Modifiers::SHIFT,
+                false,
+                false,
+            ),
+            Some(Shortcut::ZoomIn)
+        );
+        assert_eq!(
+            shortcut_for_key(Key::Character("-"), Modifiers::COMMAND, false, false),
+            Some(Shortcut::ZoomOut)
+        );
+
+        assert_eq!(
+            shortcut_for_key(Key::Character("+"), Modifiers::empty(), false, false),
+            None
+        );
+        assert_eq!(
+            shortcut_for_key(
+                Key::Character("+"),
+                Modifiers::COMMAND | Modifiers::ALT,
+                false,
+                false,
+            ),
+            None
+        );
+        assert_eq!(
+            shortcut_for_key(Key::Character("+"), Modifiers::COMMAND, true, false),
+            None
+        );
+    }
+
+    #[test]
+    fn zoom_shortcuts_do_not_require_an_active_folder_browser() {
+        assert_eq!(
+            shortcut_for_key(Key::Character("="), Modifiers::COMMAND, false, false),
+            Some(Shortcut::ZoomIn)
+        );
+        assert_eq!(
+            shortcut_for_key(Key::Character("j"), Modifiers::empty(), false, false),
+            None
+        );
+        assert_eq!(
+            shortcut_for_key(Key::Character("j"), Modifiers::empty(), false, true),
+            Some(Shortcut::Browse(BrowseDirection::Next))
+        );
     }
 
     #[test]

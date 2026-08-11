@@ -197,18 +197,21 @@ where
                 },
                 self.style.background,
             );
-        });
 
-        renderer.with_translation(translation, |renderer| {
-            self.content.as_widget().draw(
-                &tree.children[0],
-                renderer,
-                theme,
-                style,
-                layout.children().next().expect("NFO paper content layout"),
-                cursor - translation,
-                &(*viewport - translation),
-            );
+            // Keep the child in the paper's clipped layer. Drawing it after
+            // popping this layer would record ordinary text in the earlier
+            // parent layer, which lets the opaque paper cover the paragraph.
+            renderer.with_translation(translation, |renderer| {
+                self.content.as_widget().draw(
+                    &tree.children[0],
+                    renderer,
+                    theme,
+                    style,
+                    layout.children().next().expect("NFO paper content layout"),
+                    cursor - translation,
+                    &(*viewport - translation),
+                );
+            });
         });
     }
 
@@ -311,7 +314,12 @@ fn paper_glows(art_color: Color, is_dark: bool, has_blocks: bool) -> [Shadow; 2]
 
 #[cfg(test)]
 mod tests {
-    use iced::{Color, Rectangle, Shadow, Size, Vector};
+    use iced::advanced::Renderer as _;
+    use iced::advanced::widget::Tree;
+    use iced::advanced::{Layout, Widget, image, layout, mouse, renderer};
+    use iced::{
+        Background, Color, Element, Length, Rectangle, Shadow, Size, Transformation, Vector,
+    };
 
     use super::{
         PAPER_FADE_RADIUS, PAPER_GLOW_BLOCK_ART_OPACITY_SCALE, PAPER_GLOW_INNER_DARK_OPACITY,
@@ -320,10 +328,135 @@ mod tests {
         paper_fade, paper_glows, paper_size, paper_translation, presented_paper_bounds,
     };
 
+    #[derive(Default)]
+    struct LayerProbeRenderer {
+        current_layer: usize,
+        next_layer: usize,
+        previous_layers: Vec<usize>,
+        quads: Vec<(usize, Color)>,
+    }
+
+    impl iced::advanced::Renderer for LayerProbeRenderer {
+        fn start_layer(&mut self, _bounds: Rectangle) {
+            self.previous_layers.push(self.current_layer);
+            self.current_layer = self.next_layer;
+            self.next_layer += 1;
+        }
+
+        fn end_layer(&mut self) {
+            self.current_layer = self.previous_layers.pop().expect("active probe layer");
+        }
+
+        fn start_transformation(&mut self, _transformation: Transformation) {}
+
+        fn end_transformation(&mut self) {}
+
+        fn fill_quad(&mut self, _quad: renderer::Quad, background: impl Into<Background>) {
+            if let Background::Color(color) = background.into() {
+                self.quads.push((self.current_layer, color));
+            }
+        }
+
+        fn reset(&mut self, _new_bounds: Rectangle) {}
+
+        fn allocate_image(
+            &mut self,
+            _handle: &image::Handle,
+            callback: impl FnOnce(Result<image::Allocation, image::Error>) + Send + 'static,
+        ) {
+            callback(Err(image::Error::Unsupported));
+        }
+    }
+
+    struct LayerMarker(Color);
+
+    impl Widget<(), (), LayerProbeRenderer> for LayerMarker {
+        fn size(&self) -> Size<Length> {
+            Size::new(Length::Fixed(40.0), Length::Fixed(40.0))
+        }
+
+        fn layout(
+            &mut self,
+            _tree: &mut Tree,
+            _renderer: &LayerProbeRenderer,
+            _limits: &layout::Limits,
+        ) -> layout::Node {
+            layout::Node::new(Size::new(40.0, 40.0))
+        }
+
+        fn draw(
+            &self,
+            _tree: &Tree,
+            renderer: &mut LayerProbeRenderer,
+            _theme: &(),
+            _style: &renderer::Style,
+            layout: Layout<'_>,
+            _cursor: mouse::Cursor,
+            _viewport: &Rectangle,
+        ) {
+            renderer.fill_quad(
+                renderer::Quad {
+                    bounds: layout.bounds(),
+                    ..renderer::Quad::default()
+                },
+                self.0,
+            );
+        }
+    }
+
     #[test]
     fn paper_size_adds_equal_padding_to_every_edge() {
         assert_eq!(PAPER_PADDING, 24.0);
         assert_eq!(paper_size(Size::new(560.0, 400.0)), Size::new(608.0, 448.0));
+    }
+
+    #[test]
+    fn opaque_paper_is_never_recorded_after_its_child_content() {
+        let paper_color = Color::from_rgb(0.1, 0.2, 0.3);
+        let marker_color = Color::from_rgb(1.0, 0.0, 1.0);
+        let marker: Element<'_, (), (), LayerProbeRenderer> =
+            Element::new(LayerMarker(marker_color));
+        let mut paper = super::NfoPaper::new(
+            marker,
+            super::NfoPaperStyle::new(paper_color, Color::WHITE, true),
+            false,
+        );
+        let mut tree = Tree {
+            tag: paper.tag(),
+            state: paper.state(),
+            children: paper.children(),
+        };
+        let mut renderer = LayerProbeRenderer::default();
+        let node = paper.layout(
+            &mut tree,
+            &renderer,
+            &layout::Limits::new(Size::ZERO, Size::new(200.0, 200.0)),
+        );
+
+        paper.draw(
+            &tree,
+            &mut renderer,
+            &(),
+            &renderer::Style {
+                text_color: Color::WHITE,
+            },
+            Layout::new(&node),
+            mouse::Cursor::Unavailable,
+            &Rectangle::with_size(Size::new(200.0, 200.0)),
+        );
+
+        let paper_layer = renderer
+            .quads
+            .iter()
+            .find_map(|(layer, color)| (*color == paper_color).then_some(*layer))
+            .expect("opaque paper quad");
+        let child_layer = renderer
+            .quads
+            .iter()
+            .find_map(|(layer, color)| (*color == marker_color).then_some(*layer))
+            .expect("child marker quad");
+
+        assert!(child_layer >= paper_layer);
     }
 
     #[test]

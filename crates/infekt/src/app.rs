@@ -39,6 +39,7 @@ pub(crate) enum Message {
     FolderScanReady(ScanResult),
     ZoomIn,
     ZoomOut,
+    ResetZoom,
     ToggleInspector,
     ToggleOverflow,
     ShowAbout,
@@ -169,6 +170,12 @@ impl InfektApp {
                 follow_up = self.ensure_backdrop();
                 Task::none()
             }
+            Message::ResetZoom => {
+                self.presentation.reset_zoom();
+                self.apply_current_zoom();
+                follow_up = self.ensure_backdrop();
+                Task::none()
+            }
             Message::ToggleInspector => {
                 self.presentation.inspector_open = !self.presentation.inspector_open;
                 self.presentation.overflow_open = false;
@@ -212,9 +219,11 @@ impl InfektApp {
             self.presentation.overflow_open,
         ) {
             let browser_active = self.folder_browser.is_active();
-            keyboard::listen().filter_map(move |event| {
-                shortcut_for_event(event, browser_active).map(Shortcut::message)
-            })
+            keyboard::listen()
+                .with(browser_active)
+                .filter_map(|(browser_active, event)| {
+                    shortcut_for_event(event, browser_active).map(Shortcut::message)
+                })
         } else {
             Subscription::none()
         };
@@ -333,6 +342,7 @@ impl InfektApp {
 enum Shortcut {
     ZoomIn,
     ZoomOut,
+    ResetZoom,
     Browse(BrowseDirection),
 }
 
@@ -341,6 +351,7 @@ impl Shortcut {
         match self {
             Self::ZoomIn => Message::ZoomIn,
             Self::ZoomOut => Message::ZoomOut,
+            Self::ResetZoom => Message::ResetZoom,
             Self::Browse(direction) => Message::Browse(direction),
         }
     }
@@ -379,13 +390,16 @@ fn shortcut_for_key(
 }
 
 fn zoom_shortcut_for_key(key: Key<&str>, modifiers: Modifiers) -> Option<Shortcut> {
-    if modifiers.difference(Modifiers::SHIFT) != Modifiers::COMMAND {
-        return None;
-    }
-
     match key {
-        Key::Character("+" | "=") => Some(Shortcut::ZoomIn),
-        Key::Character("-") => Some(Shortcut::ZoomOut),
+        Key::Character("+" | "=")
+            if modifiers.difference(Modifiers::SHIFT) == Modifiers::COMMAND =>
+        {
+            Some(Shortcut::ZoomIn)
+        }
+        Key::Character("-") if modifiers.difference(Modifiers::SHIFT) == Modifiers::COMMAND => {
+            Some(Shortcut::ZoomOut)
+        }
+        Key::Character("0") if modifiers == Modifiers::COMMAND => Some(Shortcut::ResetZoom),
         _ => None,
     }
 }
@@ -440,6 +454,8 @@ mod tests {
 
         let _ = app.update(Message::ZoomIn);
         assert_eq!(app.presentation.zoom_percent, 110);
+        let _ = app.update(Message::ResetZoom);
+        assert_eq!(app.presentation.zoom_percent, 100);
 
         let _ = app.update(Message::Inspector(
             presentation_inspector::Message::ThemeSelected(NfoThemePreset::CobaltPaper),
@@ -500,6 +516,15 @@ mod tests {
     }
 
     #[test]
+    fn keyboard_subscription_accepts_runtime_browser_state() {
+        let (app, _startup) = InfektApp::new();
+
+        // Iced checks this constraint during code generation, so constructing the
+        // subscription here guards against accidentally capturing state again.
+        let _subscription = app.subscription();
+    }
+
+    #[test]
     fn zoom_shortcuts_use_the_platform_command_modifier() {
         assert_eq!(
             shortcut_for_key(Key::Character("="), Modifiers::COMMAND, false, false),
@@ -518,9 +543,30 @@ mod tests {
             shortcut_for_key(Key::Character("-"), Modifiers::COMMAND, false, false),
             Some(Shortcut::ZoomOut)
         );
+        assert_eq!(
+            shortcut_for_key(Key::Character("0"), Modifiers::COMMAND, false, false),
+            Some(Shortcut::ResetZoom)
+        );
+        assert_eq!(
+            shortcut_for_key(Key::Character("0"), Modifiers::COMMAND, false, true),
+            Some(Shortcut::ResetZoom)
+        );
 
         assert_eq!(
             shortcut_for_key(Key::Character("+"), Modifiers::empty(), false, false),
+            None
+        );
+        assert_eq!(
+            shortcut_for_key(Key::Character("0"), Modifiers::empty(), false, false),
+            None
+        );
+        assert_eq!(
+            shortcut_for_key(
+                Key::Character("0"),
+                Modifiers::COMMAND | Modifiers::SHIFT,
+                false,
+                false,
+            ),
             None
         );
         assert_eq!(

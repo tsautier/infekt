@@ -11,7 +11,7 @@ pub(crate) const BACKDROP_WIDTH: u32 = 640;
 pub(crate) const BACKDROP_HEIGHT: u32 = 400;
 
 const BACKDROP_TILE_WIDTH: u32 = BACKDROP_WIDTH / 2;
-const ALGORITHM_VERSION: u8 = 10;
+const ALGORITHM_VERSION: u8 = 12;
 const CROP_MARGIN_CELLS: usize = 2;
 const LEADING_ART_BLOCK_THRESHOLD: usize = 20;
 const CANVAS_PADDING: f64 = 24.0;
@@ -19,7 +19,6 @@ const ARTWORK_SCALE: f64 = 0.75;
 const BLUR_SIGMA: f32 = 8.0;
 const FALLBACK_CHARACTER_RATIO_MILLI: u16 = 583;
 const MAX_CHARACTER_RATIO_MILLI: u16 = 4_000;
-const TEXT_MARK_OPACITY: f32 = 0.38;
 
 /// Everything that can change the pixels of an ambient NFO backdrop.
 ///
@@ -30,7 +29,6 @@ pub(crate) struct BackdropKey {
     algorithm_version: u8,
     grid_id: u64,
     background_color: [u8; 3],
-    text_color: [u8; 4],
     art_color: [u8; 4],
     character_ratio_milli: u16,
 }
@@ -45,7 +43,6 @@ impl BackdropKey {
             algorithm_version: ALGORITHM_VERSION,
             grid_id: grid.id,
             background_color: rgb8(settings.background_color),
-            text_color: rgba8(settings.text_color),
             art_color: rgba8(settings.art_color),
             character_ratio_milli: character_ratio_milli(character_ratio),
         }
@@ -83,7 +80,7 @@ impl BackdropRequest {
     }
 
     /// Produces a fixed-size blurred image, or `None` when the grid has no
-    /// visible blocks or ordinary text. Links are intentionally ignored.
+    /// visible block art. Text and links are intentionally ignored.
     pub(crate) fn generate(self) -> Option<BackdropImage> {
         let pixels = rasterize(&self.grid, self.key)?;
         let pixels = imageops::fast_blur(&pixels, BLUR_SIGMA);
@@ -346,18 +343,11 @@ fn rasterize(grid: &NfoRendererGrid, key: BackdropKey) -> Option<RgbaImage> {
 
     paint_grid(&mut tile, grid, bounds, transform, key);
 
-    // Mirror one zoomed-out tile instead of stretching the NFO.
-    // The matching center-edge pixels let the later full-image blur erase the
-    // change in direction without introducing a value seam.
-    let mirrored_tile = imageops::flip_horizontal(&tile);
+    // Repeat one zoomed-out tile instead of stretching or mirroring the NFO.
+    // Blurring happens after composition so the tile boundary remains soft.
     let mut image = RgbaImage::from_pixel(BACKDROP_WIDTH, BACKDROP_HEIGHT, background);
     imageops::replace(&mut image, &tile, 0, 0);
-    imageops::replace(
-        &mut image,
-        &mirrored_tile,
-        i64::from(BACKDROP_TILE_WIDTH),
-        0,
-    );
+    imageops::replace(&mut image, &tile, i64::from(BACKDROP_TILE_WIDTH), 0);
 
     Some(image)
 }
@@ -401,43 +391,18 @@ fn paint_grid(
                 );
             }
         }
-
-        for flight in &line.text_flights {
-            for (offset, character) in flight.text.chars().enumerate() {
-                if character.is_whitespace() {
-                    continue;
-                }
-
-                let Some(col) = flight.col.checked_add(offset) else {
-                    break;
-                };
-
-                if col >= grid.width || !bounds.contains(col, line.row) {
-                    continue;
-                }
-
-                let mark = transform
-                    .cell_rect(col, line.row)
-                    .subrect(0.16, 0.34, 0.84, 0.66);
-                blend_rect(image, mark, key.text_color, TEXT_MARK_OPACITY);
-            }
-        }
     }
 }
 
 /// Returns the center of mass of the ink that will actually be painted.
 ///
-/// Block area and shade opacity match `block_geometry`; ordinary text uses
-/// the same subdued mark dimensions and opacity as `rasterize`. The selected
-/// content bounds also exclude any sparse prelude before a dense art anchor.
+/// Block area and shade opacity match `block_geometry`. The selected content
+/// bounds also exclude any sparse prelude before a dense art anchor.
 fn ink_focal(grid: &NfoRendererGrid, bounds: ContentBounds, key: BackdropKey) -> (f64, f64) {
     let mut weighted_col = 0.0;
     let mut weighted_row = 0.0;
     let mut total_weight = 0.0;
     let art_alpha = f64::from(key.art_color[3]) / 255.0;
-    let text_alpha = f64::from(key.text_color[3]) / 255.0;
-    let text_mark_area = (0.84 - 0.16) * (0.66 - 0.34);
-    let text_weight = text_mark_area * f64::from(TEXT_MARK_OPACITY) * text_alpha;
 
     for line in &grid.lines {
         if line.row >= grid.height || line.row < bounds.content_top || line.row >= bounds.bottom {
@@ -465,30 +430,6 @@ fn ink_focal(grid: &NfoRendererGrid, bounds: ContentBounds, key: BackdropKey) ->
                 weighted_col += center_col * weight;
                 weighted_row += center_row * weight;
                 total_weight += weight;
-            }
-        }
-
-        if text_weight <= 0.0 {
-            continue;
-        }
-
-        for flight in &line.text_flights {
-            for (offset, character) in flight.text.chars().enumerate() {
-                if character.is_whitespace() {
-                    continue;
-                }
-
-                let Some(col) = flight.col.checked_add(offset) else {
-                    break;
-                };
-
-                if col >= grid.width || !bounds.contains(col, line.row) {
-                    continue;
-                }
-
-                weighted_col += (col as f64 + 0.5) * text_weight;
-                weighted_row += (line.row as f64 + 0.5) * text_weight;
-                total_weight += text_weight;
             }
         }
     }
@@ -540,19 +481,6 @@ fn visible_bounds(grid: &NfoRendererGrid) -> Option<ContentBounds> {
                 }
 
                 let Some(col) = group.col.checked_add(offset) else {
-                    break;
-                };
-                include(col, line.row);
-            }
-        }
-
-        for flight in &line.text_flights {
-            for (offset, character) in flight.text.chars().enumerate() {
-                if character.is_whitespace() {
-                    continue;
-                }
-
-                let Some(col) = flight.col.checked_add(offset) else {
                     break;
                 };
                 include(col, line.row);
@@ -885,7 +813,7 @@ mod tests {
         assert_ne!(original, BackdropKey::new(&grid, &changed, 0.583));
         changed = settings.clone();
         changed.text_color = Rgba::new(0.2, 0.3, 0.4, 0.5);
-        assert_ne!(original, BackdropKey::new(&grid, &changed, 0.583));
+        assert_eq!(original, BackdropKey::new(&grid, &changed, 0.583));
         changed = settings.clone();
         changed.art_color = Rgba::new(0.2, 0.3, 0.4, 0.5);
         assert_ne!(original, BackdropKey::new(&grid, &changed, 0.583));
@@ -923,7 +851,7 @@ mod tests {
             Some(ContentBounds {
                 left: 18,
                 top: 8,
-                right: 33,
+                right: 23,
                 bottom: 13,
                 content_top: 0,
                 has_dense_anchor: false,
@@ -973,7 +901,7 @@ mod tests {
             ContentBounds {
                 left: 28,
                 top: 8,
-                right: 73,
+                right: 63,
                 bottom: 18,
                 content_top: 10,
                 has_dense_anchor: true,
@@ -981,7 +909,7 @@ mod tests {
         );
         assert!(!bounds.contains(35, 8));
         assert!(bounds.contains(30, 10));
-        assert!(bounds.contains(70, 15));
+        assert!(bounds.contains(60, 15));
     }
 
     #[test]
@@ -1036,7 +964,7 @@ mod tests {
     }
 
     #[test]
-    fn sparse_art_and_text_only_grids_keep_the_existing_fallback() {
+    fn sparse_art_keeps_the_fallback_while_text_only_has_no_backdrop() {
         let mut sparse = line(7);
         sparse.block_groups.push(NfoRendererBlockGroup {
             col: 12,
@@ -1056,12 +984,9 @@ mod tests {
             text: "text-only NFO".into(),
         });
         let text_grid = grid_with_line(80, 25, 13, text);
-        let text_bounds = visible_bounds(&text_grid).unwrap();
 
         assert_eq!(first_dense_block_row(&text_grid), None);
-        assert_eq!(text_bounds.content_top, 0);
-        assert!(!text_bounds.has_dense_anchor);
-        assert!(text_bounds.contains(6, 4));
+        assert!(visible_bounds(&text_grid).is_none());
     }
 
     #[test]
@@ -1375,25 +1300,9 @@ mod tests {
     }
 
     #[test]
-    fn text_marks_contribute_to_the_focal_without_counting_whitespace() {
-        let mut content = line(4);
-        content.text_flights.push(NfoRendererTextFlight {
-            col: 4,
-            text: "A  B".into(),
-        });
-        let grid = grid_with_line(20, 10, 17, content);
-        let settings = NfoRenderSettings::default();
-        let key = BackdropKey::new(&grid, &settings, 0.583);
-        let bounds = visible_bounds(&grid).unwrap();
-
-        assert_eq!(ink_focal(&grid, bounds, key), (6.0, 4.5));
-    }
-
-    #[test]
     fn zero_ink_uses_the_sparse_fallback_bounds_midpoint() {
         let grid = single_block_grid(NfoRendererBlockShape::FullBlock);
         let settings = NfoRenderSettings {
-            text_color: Rgba::new(1.0, 1.0, 1.0, 0.0),
             art_color: Rgba::new(1.0, 1.0, 1.0, 0.0),
             ..NfoRenderSettings::default()
         };
@@ -1500,7 +1409,24 @@ mod tests {
     }
 
     #[test]
-    fn mirror_repeat_distributes_blurred_energy_across_both_outer_quarters() {
+    fn backdrop_repeats_the_same_tile_without_mirroring() {
+        let grid = repeat_energy_grid();
+        let settings = high_contrast_settings();
+        let key = BackdropKey::new(&grid, &settings, 0.583);
+        let raw = rasterize(&grid, key).unwrap();
+
+        for y in 0..BACKDROP_HEIGHT {
+            for x in 0..BACKDROP_TILE_WIDTH {
+                assert_eq!(
+                    raw.get_pixel(x, y),
+                    raw.get_pixel(x + BACKDROP_TILE_WIDTH, y)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_tiles_distribute_blurred_energy_across_both_outer_quarters() {
         let grid = repeat_energy_grid();
         let settings = high_contrast_settings();
         let key = BackdropKey::new(&grid, &settings, 0.583);
@@ -1520,14 +1446,10 @@ mod tests {
             energetic_pixels.iter().all(|&count| count > 0),
             "an outer quarter contained no ambient energy: {energetic_pixels:?}"
         );
-        assert_eq!(
-            energetic_pixels[0], energetic_pixels[1],
-            "mirrored outer quarters contained different amounts of ambient energy"
-        );
     }
 
     #[test]
-    fn mirror_repeat_has_no_abrupt_center_seam_after_blur() {
+    fn repeated_tiles_have_no_abrupt_center_seam_after_blur() {
         let grid = repeat_energy_grid();
         let settings = high_contrast_settings();
         let key = BackdropKey::new(&grid, &settings, 0.583);
@@ -1553,7 +1475,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_whitespace_and_links_only_grids_generate_no_backdrop() {
+    fn empty_text_whitespace_and_links_only_grids_generate_no_backdrop() {
         let empty = NfoRendererGrid {
             width: 80,
             height: 25,
@@ -1572,12 +1494,20 @@ mod tests {
         let links_only = grid_with_line(80, 25, 2, links_only);
         assert!(visible_bounds(&links_only).is_none());
 
+        let mut text_only = line(4);
+        text_only.text_flights.push(NfoRendererTextFlight {
+            col: 4,
+            text: "ordinary text".into(),
+        });
+        let text_only = grid_with_line(80, 25, 3, text_only);
+        assert!(visible_bounds(&text_only).is_none());
+
         let mut whitespace = line(4);
         whitespace.text_flights.push(NfoRendererTextFlight {
             col: 4,
             text: "   \t".into(),
         });
-        let whitespace = grid_with_line(80, 25, 3, whitespace);
+        let whitespace = grid_with_line(80, 25, 4, whitespace);
         assert!(visible_bounds(&whitespace).is_none());
     }
 

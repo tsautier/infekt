@@ -9,7 +9,8 @@ pub(crate) const BUILT_IN_THEMES: [NfoThemePreset; 2] =
 
 const MIN_ZOOM_PERCENT: u16 = 50;
 const MAX_ZOOM_PERCENT: u16 = 300;
-const ZOOM_STEP_PERCENT: u16 = 25;
+const DEFAULT_ZOOM_PERCENT: u16 = 100;
+const ZOOM_STEP_PERCENT: u16 = 10;
 const BASE_BLOCK_WIDTH: u16 = 7;
 const BASE_BLOCK_HEIGHT: u16 = 12;
 const BASE_FONT_SIZE: f32 = 14.0;
@@ -123,7 +124,7 @@ impl PresentationState {
             inspector_open: true,
             overflow_open: false,
             about_open: false,
-            zoom_percent: 100,
+            zoom_percent: DEFAULT_ZOOM_PERCENT,
             use_ansi_colors: true,
             line_wrapping: false,
             antialiasing: true,
@@ -162,6 +163,10 @@ impl PresentationState {
             .zoom_percent
             .saturating_sub(ZOOM_STEP_PERCENT)
             .max(MIN_ZOOM_PERCENT);
+    }
+
+    pub(crate) fn reset_zoom(&mut self) {
+        self.zoom_percent = DEFAULT_ZOOM_PERCENT;
     }
 
     pub(crate) fn apply_zoom(&self, settings: &mut NfoRenderSettings) {
@@ -220,7 +225,7 @@ mod tests {
         let mut presentation = PresentationState::new();
         let mut settings = NfoRenderSettings::default();
 
-        for _ in 0..20 {
+        for _ in 0..100 {
             presentation.zoom_in();
         }
         assert_eq!(presentation.zoom_percent, MAX_ZOOM_PERCENT);
@@ -229,7 +234,7 @@ mod tests {
         assert_eq!(settings.enhanced_view_block_height, 36);
         assert_eq!(settings.classic_font_size, 42.0);
 
-        for _ in 0..20 {
+        for _ in 0..100 {
             presentation.zoom_out();
         }
         assert_eq!(presentation.zoom_percent, MIN_ZOOM_PERCENT);
@@ -237,5 +242,39 @@ mod tests {
         assert_eq!(settings.enhanced_view_block_width, 4);
         assert_eq!(settings.enhanced_view_block_height, 6);
         assert_eq!(settings.classic_font_size, 7.0);
+    }
+
+    #[test]
+    fn zoom_uses_ten_percent_intermediate_steps() {
+        let mut presentation = PresentationState::new();
+        let mut settings = NfoRenderSettings::default();
+
+        presentation.zoom_in();
+        assert_eq!(presentation.zoom_percent, 110);
+        presentation.apply_zoom(&mut settings);
+        assert_eq!(settings.enhanced_view_block_width, 8);
+        assert_eq!(settings.enhanced_view_block_height, 13);
+        assert!((settings.classic_font_size - 15.4).abs() < 0.001);
+
+        presentation.zoom_in();
+        assert_eq!(presentation.zoom_percent, 120);
+        presentation.zoom_out();
+        assert_eq!(presentation.zoom_percent, 110);
+    }
+
+    #[test]
+    fn zoom_reset_restores_base_dimensions() {
+        let mut presentation = PresentationState::new();
+        let mut settings = NfoRenderSettings::default();
+
+        presentation.zoom_in();
+        presentation.zoom_in();
+        presentation.reset_zoom();
+        presentation.apply_zoom(&mut settings);
+
+        assert_eq!(presentation.zoom_percent, DEFAULT_ZOOM_PERCENT);
+        assert_eq!(settings.enhanced_view_block_width, BASE_BLOCK_WIDTH);
+        assert_eq!(settings.enhanced_view_block_height, BASE_BLOCK_HEIGHT);
+        assert_eq!(settings.classic_font_size, BASE_FONT_SIZE);
     }
 }
